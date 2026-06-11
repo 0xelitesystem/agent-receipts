@@ -120,6 +120,16 @@ The parser is isolated in [`agent_receipts/parser.py`](agent_receipts/parser.py)
 - Projects with no test suite will show "done" claims as UNVERIFIED — that's accurate (there *were* no receipts), but it means the score is most meaningful on projects with checks the agent can run.
 - A passing test run proves the suite passed — not that the suite is any good.
 
+## Part of the agent accountability suite
+
+Five zero-dependency tools that audit a finished agent session from five angles:
+
+- **agent-receipts** — did the agent's claims ("tests pass") match reality?
+- [agent-leaks](https://github.com/0xelitesystem/agent-leaks) — did it leak secrets into the transcript?
+- [agent-blast-radius](https://github.com/0xelitesystem/agent-blast-radius) — what irreversible actions did it take?
+- [agent-rules](https://github.com/0xelitesystem/agent-rules) — did it follow your `CLAUDE.md`?
+- [agent-cost](https://github.com/0xelitesystem/agent-cost) — where did the tokens and money go?
+
 ## Roadmap
 
 - [ ] Adapters: Codex CLI, OpenCode, Gemini CLI session formats
