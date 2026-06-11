@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-receipts"
+version = "0.1.0"
+description = "Audit what your coding agent claimed against what it actually did."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Salman Ahsan (RBL)" }]
+keywords = ["ai-agents", "claude-code", "verification", "trust", "audit", "llm"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/0xelitesystem/agent-receipts"
+Issues = "https://github.com/0xelitesystem/agent-receipts/issues"
+
+[project.scripts]
+receipts = "agent_receipts.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
