@@ -4,7 +4,7 @@ Claims are weighted by verdict, gaming signals subtract on top:
 verified 1.0 · stale 0.5 · unverified 0.25 · contradicted 0.0
 gaming: high -15 · medium -8 · low -4
 
-A session with zero claims has no score — there was nothing to audit.
+A session with zero claims has no score: there was nothing to audit.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ _GRADES = [(90, "A"), (80, "B"), (70, "C"), (60, "D"), (0, "F")]
 def score_audit(result: AuditResult) -> AuditResult:
     if not result.findings:
         result.score = None
-        result.grade = "—"
+        result.grade = "n/a"
         return result
 
     earned = sum(_VERDICT_WEIGHT[f.verdict] for f in result.findings)

@@ -1,6 +1,6 @@
 """Detect test-gaming: changes that make checks pass by weakening them.
 
-These are signals, not convictions — a human removing a genuinely bad
+These are signals, not convictions. A human removing a genuinely bad
 assertion looks the same as an agent deleting one to go green. Each
 signal carries a severity and points at the exact event so the reviewer
 can judge for themselves.

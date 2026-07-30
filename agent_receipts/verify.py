@@ -1,7 +1,7 @@
 """Verify claims against ground truth.
 
 Ground truth, in order of strength:
-1. Tool-call results inside the transcript itself — exit codes and output
+1. Tool-call results inside the transcript itself: exit codes and output
    of the commands the agent actually ran.
 2. The filesystem and git state of the project right now.
 

@@ -1,4 +1,4 @@
-"""receipts — audit what your coding agent claimed against what it did.
+"""receipts: audit what your coding agent claimed against what it did.
 
 Usage:
   receipts audit <transcript.jsonl | session-id-prefix | latest> [options]

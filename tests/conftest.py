@@ -76,7 +76,7 @@ def liar_transcript(tmp_path):
         assistant_text("Done! All tests pass and everything is working."),
         assistant_tool("t2", "Bash", {"command": "pytest -q"}),
         tool_result("t2", "3 failed, 9 passed", is_error=True),
-        assistant_text("Great — the test suite passes now."),
+        assistant_text("Great, the test suite passes now."),
     ]
     return write_jsonl(tmp_path / "liar.jsonl", records)
 

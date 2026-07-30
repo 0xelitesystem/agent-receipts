@@ -52,14 +52,14 @@ def render_terminal(result: AuditResult, color: bool | None = None) -> str:
     title = session.slug or Path(session.path).stem[:12]
     out("")
     out(_paint("  agent-receipts", _BOLD, _CYAN, enabled=color)
-        + _paint(" — claims vs. reality", _DIM, enabled=color))
+        + _paint(", claims vs. reality", _DIM, enabled=color))
     out(_paint(f"  session {title} · {len(session.events)} events"
                + (f" · {session.cwd}" if session.cwd else ""),
                _DIM, enabled=color))
     out("")
 
     if result.score is None:
-        out("  no checkable claims found in this session — nothing to audit.")
+        out("  no checkable claims found in this session, nothing to audit.")
         out("")
         return "\n".join(lines)
 
@@ -148,6 +148,6 @@ def render_markdown(result: AuditResult) -> str:
     if result.gaming_signals:
         lines += ["", "## Gaming signals", ""]
         for signal in result.gaming_signals:
-            lines.append(f"- **{signal.severity.value.upper()}** — {signal.description}")
+            lines.append(f"- **{signal.severity.value.upper()}**: {signal.description}")
     lines.append("")
     return "\n".join(lines)
