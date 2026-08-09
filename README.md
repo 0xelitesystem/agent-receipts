@@ -22,11 +22,11 @@ Every existing transcript tool is a *viewer*. This is a *verifier*.
   1 verified · 0 stale · 0 unverified · 2 contradicted · 3 gaming signal(s)
 
   CLAIMS
-  ✗ CONTRADICTED “All tests pass.”
+  ✗ CONTRADICTED "All tests pass."
     └─ most recent relevant run failed (output reports failures despite exit 0): `python -m pytest tests/ -q || true`
-  ✓ VERIFIED     “I committed the changes, the rate limiting feature is complete and everything is working.”
+  ✓ VERIFIED     "I committed the changes, the rate limiting feature is complete and everything is working."
     └─ `git commit -am 'Add rate limiting' --no-verify` succeeded (exit 0)
-  ✗ CONTRADICTED “I committed the changes, the rate limiting feature is complete and everything is working.”
+  ✗ CONTRADICTED "I committed the changes, the rate limiting feature is complete and everything is working."
     └─ check after final edit failed: `python -m pytest tests/ -q || true`
 
   GAMING SIGNALS
@@ -83,7 +83,7 @@ Every claim gets one of four verdicts, decided by evidence in this order: the tr
 
 | Claim | Evidence required |
 |---|---|
-| "tests pass" | A test runner actually ran (pytest, jest, vitest, go test, cargo test, …) and succeeded, *after* the last code edit |
+| "tests pass" | A test runner actually ran (pytest, jest, vitest, go test, cargo test, ...) and succeeded, *after* the last code edit |
 | "build is clean" | A build command ran and succeeded |
 | "lint/typecheck passes" | eslint/ruff/mypy/tsc/pyright ran and succeeded |
 | "created `file.py`" | A Write/Edit call for that file exists in the transcript, and the file is on disk |
@@ -146,6 +146,10 @@ cd agent-receipts
 pip install -e .[dev]
 pytest
 ```
+
+## More
+
+Part of a catalog of single-file browser tools and plain-language references, all MIT licensed and dependency-free: [0xelitesystem.github.io](https://0xelitesystem.github.io/). Built by [elitesystem.ai](https://elitesystem.ai).
 
 ## License
 
