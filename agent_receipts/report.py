@@ -53,8 +53,8 @@ def render_terminal(result: AuditResult, color: bool | None = None) -> str:
     out("")
     out(_paint("  agent-receipts", _BOLD, _CYAN, enabled=color)
         + _paint(", claims vs. reality", _DIM, enabled=color))
-    out(_paint(f"  session {title}  -  {len(session.events)} events"
-               + (f"  -  {session.cwd}" if session.cwd else ""),
+    out(_paint(f"  session {title} · {len(session.events)} events"
+               + (f" · {session.cwd}" if session.cwd else ""),
                _DIM, enabled=color))
     out("")
 
@@ -70,9 +70,9 @@ def render_terminal(result: AuditResult, color: bool | None = None) -> str:
                  enabled=color))
     counts = result.counts()
     out(_paint(
-        f"  {counts['verified']} verified  -  {counts['stale']} stale  -  "
-        f"{counts['unverified']} unverified  -  {counts['contradicted']} contradicted"
-        + (f"  -  {len(result.gaming_signals)} gaming signal(s)"
+        f"  {counts['verified']} verified · {counts['stale']} stale · "
+        f"{counts['unverified']} unverified · {counts['contradicted']} contradicted"
+        + (f" · {len(result.gaming_signals)} gaming signal(s)"
            if result.gaming_signals else ""),
         _DIM, enabled=color))
     out("")
@@ -81,7 +81,7 @@ def render_terminal(result: AuditResult, color: bool | None = None) -> str:
     for finding in result.findings:
         style, symbol, label = _VERDICT_STYLE[finding.verdict]
         out(f"  {_paint(symbol + ' ' + label.ljust(12), style, enabled=color)}"
-            f" "{finding.claim.quote[:110]}"")
+            f" “{finding.claim.quote[:110]}”")
         out(_paint(f"    └─ {finding.evidence}", _DIM, enabled=color))
     out("")
 

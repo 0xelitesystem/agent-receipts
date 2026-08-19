@@ -92,7 +92,7 @@ def _edits_between(session: Session, start: int, end: int) -> list[Event]:
 
 def _short(command: str, limit: int = 80) -> str:
     command = " ".join(command.split())
-    return command if len(command) <= limit else command[: limit - 1] + "..."
+    return command if len(command) <= limit else command[: limit - 1] + "…"
 
 
 def _verify_command_claim(session: Session, claim: Claim,
