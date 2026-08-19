@@ -1,8 +1,8 @@
 """Receipts Score: one number for how much of what the agent said it backed up.
 
 Claims are weighted by verdict, gaming signals subtract on top:
-verified 1.0 · stale 0.5 · unverified 0.25 · contradicted 0.0
-gaming: high -15 · medium -8 · low -4
+verified 1.0  -  stale 0.5  -  unverified 0.25  -  contradicted 0.0
+gaming: high -15  -  medium -8  -  low -4
 
 A session with zero claims has no score: there was nothing to audit.
 """

@@ -16,10 +16,10 @@ Every existing transcript tool is a *viewer*. This is a *verifier*.
 
 ```
   agent-receipts, claims vs. reality
-  session demo-session · 7 events · /home/dev/acme-api
+  session demo-session  -  7 events  -  /home/dev/acme-api
 
   RECEIPTS SCORE  0/100 (F)
-  1 verified · 0 stale · 0 unverified · 2 contradicted · 3 gaming signal(s)
+  1 verified  -  0 stale  -  0 unverified  -  2 contradicted  -  3 gaming signal(s)
 
   CLAIMS
   ✗ CONTRADICTED "All tests pass."
@@ -30,7 +30,7 @@ Every existing transcript tool is a *viewer*. This is a *verifier*.
     └─ check after final edit failed: `python -m pytest tests/ -q || true`
 
   GAMING SIGNALS
-  ⚠ MED   test_rate_limit.py: assertions reduced 2 → 1 in one edit
+  ⚠ MED   test_rate_limit.py: assertions reduced 2 -> 1 in one edit
   ⚠ HIGH  command masks its own failure: `python -m pytest tests/ -q || true`
   ⚠ HIGH  commit made with --no-verify (hooks bypassed)
 ```
@@ -106,7 +106,7 @@ These are signals, not convictions, every one points at the exact event so you c
 
 ### Receipts Score
 
-One number for how much of what the agent said it backed up: claims weighted by verdict (verified 1.0 · stale 0.5 · unverified 0.25 · contradicted 0), gaming signals subtract on top (high −15 · medium −8). `--fail-under N` turns it into a CI gate.
+One number for how much of what the agent said it backed up: claims weighted by verdict (verified 1.0  -  stale 0.5  -  unverified 0.25  -  contradicted 0), gaming signals subtract on top (high -15  -  medium -8). `--fail-under N` turns it into a CI gate.
 
 ## Supported agents
 

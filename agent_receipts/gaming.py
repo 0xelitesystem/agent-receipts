@@ -100,7 +100,7 @@ def detect_gaming(session: Session) -> list[GamingSignal]:
                 signals.append(GamingSignal(
                     kind="weakened_assertions", severity=GamingSeverity.MEDIUM,
                     description=f"{name}: assertions reduced "
-                                f"{old_asserts} → {new_asserts} in one edit",
+                                f"{old_asserts} -> {new_asserts} in one edit",
                     event_index=event.index,
                 ))
             if _SKIP_MARKERS.search(new) and not _SKIP_MARKERS.search(old):
