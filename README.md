@@ -92,6 +92,8 @@ Every claim gets one of four verdicts, decided by evidence in this order: the tr
 
 The exit code is the primary signal, but output is parsed too, so `pytest || true` reporting `1 failed` is still caught as a failure.
 
+Transcript paths that point at a network share or device (`\\host\share`, `//host/share`) are never opened, so the disk check for those claims is reported as not checked. Reports mask common credential shapes (tokens, keys, passwords, authorization headers), but masking is pattern based: review a report before you share it.
+
 ### Gaming signals
 
 Independent of claims, the auditor scans for changes that make checks pass by weakening them:

@@ -4,10 +4,28 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 from .models import AuditResult, Finding, GamingSeverity, Verdict
+
+# Control characters that a terminal would act on instead of showing:
+# C0 (except tab and newline), DEL, C1, and bidi overrides/isolates.
+_UNSAFE_CHARS = re.compile(
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+)
+
+
+def _escape_char(match: re.Match) -> str:
+    code = ord(match.group())
+    return f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}"
+
+
+def _safe(text: str) -> str:
+    """Show transcript text verbatim, with control codes made visible and inert."""
+    return _UNSAFE_CHARS.sub(_escape_char, text)
+
 
 _RESET = "\x1b[0m"
 _BOLD = "\x1b[1m"
@@ -49,12 +67,12 @@ def render_terminal(result: AuditResult, color: bool | None = None) -> str:
     lines: list[str] = []
     out = lines.append
 
-    title = session.slug or Path(session.path).stem[:12]
+    title = _safe(session.slug or Path(session.path).stem[:12])
     out("")
     out(_paint("  agent-receipts", _BOLD, _CYAN, enabled=color)
         + _paint(", claims vs. reality", _DIM, enabled=color))
     out(_paint(f"  session {title} · {len(session.events)} events"
-               + (f" · {session.cwd}" if session.cwd else ""),
+               + (f" · {_safe(session.cwd)}" if session.cwd else ""),
                _DIM, enabled=color))
     out("")
 
@@ -81,8 +99,8 @@ def render_terminal(result: AuditResult, color: bool | None = None) -> str:
     for finding in result.findings:
         style, symbol, label = _VERDICT_STYLE[finding.verdict]
         out(f"  {_paint(symbol + ' ' + label.ljust(12), style, enabled=color)}"
-            f" “{finding.claim.quote[:110]}”")
-        out(_paint(f"    └─ {finding.evidence}", _DIM, enabled=color))
+            f" “{_safe(finding.claim.quote[:110])}”")
+        out(_paint(f"    └─ {_safe(finding.evidence)}", _DIM, enabled=color))
     out("")
 
     if result.gaming_signals:
@@ -90,7 +108,7 @@ def render_terminal(result: AuditResult, color: bool | None = None) -> str:
         for signal in result.gaming_signals:
             style, label = _SEVERITY_STYLE[signal.severity]
             out(f"  {_paint('⚠ ' + label.ljust(5), style, enabled=color)}"
-                f" {signal.description}")
+                f" {_safe(signal.description)}")
         out("")
 
     return "\n".join(lines)
@@ -130,8 +148,8 @@ def render_markdown(result: AuditResult) -> str:
     lines = [
         "# agent-receipts audit",
         "",
-        f"- **Transcript:** `{Path(result.session.path).name}`",
-        f"- **Project:** `{result.session.cwd or 'unknown'}`",
+        f"- **Transcript:** `{_safe(Path(result.session.path).name)}`",
+        f"- **Project:** `{_safe(result.session.cwd or 'unknown')}`",
         f"- **Score:** {result.score if result.score is not None else 'n/a'}"
         f"/100 ({result.grade})",
         "",
@@ -142,12 +160,12 @@ def render_markdown(result: AuditResult) -> str:
     ]
     for finding in result.findings:
         _, symbol, label = _VERDICT_STYLE[finding.verdict]
-        quote = finding.claim.quote.replace("|", "\\|")
-        evidence = finding.evidence.replace("|", "\\|")
+        quote = _safe(finding.claim.quote).replace("|", "\\|")
+        evidence = _safe(finding.evidence).replace("|", "\\|")
         lines.append(f"| {symbol} {label} | {quote} | {evidence} |")
     if result.gaming_signals:
         lines += ["", "## Gaming signals", ""]
         for signal in result.gaming_signals:
-            lines.append(f"- **{signal.severity.value.upper()}**: {signal.description}")
+            lines.append(f"- **{signal.severity.value.upper()}**: {_safe(signal.description)}")
     lines.append("")
     return "\n".join(lines)

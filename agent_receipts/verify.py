@@ -24,6 +24,7 @@ from pathlib import Path
 from .models import (
     Claim, ClaimType, Event, EventKind, Finding, Session, Verdict,
 )
+from .redact import redact_secrets
 
 # Command shapes that count as evidence for each claim type.
 _COMMAND_EVIDENCE: dict[ClaimType, re.Pattern] = {
@@ -91,7 +92,7 @@ def _edits_between(session: Session, start: int, end: int) -> list[Event]:
 
 
 def _short(command: str, limit: int = 80) -> str:
-    command = " ".join(command.split())
+    command = " ".join(redact_secrets(command).split())
     return command if len(command) <= limit else command[: limit - 1] + "…"
 
 
@@ -139,6 +140,40 @@ def _verify_command_claim(session: Session, claim: Claim,
     )
 
 
+def _is_remote_path(path: str | Path) -> bool:
+    """UNC, device or NT-namespace path (\\\\host\\share, //host/share, \\??\\...).
+
+    Paths come from the transcript, so they are untrusted. On Windows,
+    stat-ing \\\\host\\share opens an SMB connection to that host and sends
+    the user's NTLM credentials, so these are never touched.
+    """
+    text = str(path).replace("/", "\\")
+    return text.startswith("\\\\") or text.startswith("\\??\\")
+
+
+def _local_candidates(session: Session, claim: Claim,
+                      writes: list[Event]) -> tuple[list[Path], bool]:
+    """Paths safe to check on disk, and whether any were skipped as remote."""
+    candidates: list[Path] = []
+    skipped = False
+    if _is_remote_path(session.cwd) or _is_remote_path(claim.detail):
+        skipped = True
+    else:
+        joined = Path(session.cwd) / claim.detail
+        if _is_remote_path(joined):
+            skipped = True
+        else:
+            candidates.append(joined)
+    for w in writes:
+        if not w.file_path:
+            continue
+        if _is_remote_path(w.file_path) or _is_remote_path(Path(w.file_path)):
+            skipped = True
+        else:
+            candidates.append(Path(w.file_path))
+    return candidates, skipped
+
+
 def _verify_file_created(session: Session, claim: Claim,
                          check_disk: bool) -> Finding:
     name = Path(claim.detail).name
@@ -154,9 +189,15 @@ def _verify_file_created(session: Session, claim: Claim,
             evidence=f"no Write/Edit call for `{name}` appears before the claim",
         )
     if check_disk and session.cwd:
-        on_disk = (Path(session.cwd) / claim.detail).exists() or any(
-            Path(w.file_path).exists() for w in writes if w.file_path
-        )
+        candidates, skipped = _local_candidates(session, claim, writes)
+        on_disk = any(p.exists() for p in candidates)
+        if not on_disk and skipped:
+            return Finding(
+                claim=claim, verdict=Verdict.VERIFIED,
+                evidence=f"{writes[-1].tool_name} call for `{name}` found; "
+                         f"disk not checked (network or device path)",
+                evidence_index=writes[-1].index,
+            )
         if not on_disk:
             return Finding(
                 claim=claim, verdict=Verdict.CONTRADICTED,
