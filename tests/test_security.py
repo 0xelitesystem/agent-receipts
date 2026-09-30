@@ -12,6 +12,7 @@ import os
 import pathlib
 import random
 import re
+import sys
 import time
 
 from agent_receipts.claims import extract_claims
@@ -127,9 +128,13 @@ def test_unc_write_path_is_never_probed(tmp_path, monkeypatch):
     probed = _trap_filesystem(monkeypatch)
     findings = verify_claims(session, claims, check_disk=True)
     assert probed == []
-    created = [f for f in findings if f.claim.type is ClaimType.FILE_CREATED]
-    assert [f.verdict for f in created] == [Verdict.VERIFIED]
-    assert "not checked" in created[0].evidence
+    # A backslash UNC path is a network path only on Windows. On Linux and macOS the same string is an
+    # ordinary file name with backslashes in it, so the claim match and verdict legitimately differ there;
+    # the property that holds everywhere is the one above: nothing on the path is ever probed.
+    if sys.platform == "win32":
+        created = [f for f in findings if f.claim.type is ClaimType.FILE_CREATED]
+        assert [f.verdict for f in created] == [Verdict.VERIFIED]
+        assert "not checked" in created[0].evidence
 
 
 def test_forward_slash_unc_in_claim_is_never_probed(tmp_path, monkeypatch):
