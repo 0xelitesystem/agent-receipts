@@ -5,6 +5,8 @@ Usage:
   receipts list [--project NAME] [--limit N]
 
 Options:
+  --main-only       read only the main transcript (v0.1 behaviour); by default
+                    the session's sub-agent and workflow transcripts count too
   --project NAME    only consider transcripts whose project folder matches
   --json            emit machine-readable JSON instead of the terminal report
   --md FILE         also write a Markdown report to FILE
@@ -17,11 +19,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 from . import __version__
 from .claims import extract_claims
+from .delegated import attach_sources
 from .gaming import detect_gaming
 from .models import AuditResult
 from .parser import discover_transcripts, parse_transcript, resolve_target
@@ -30,10 +34,25 @@ from .score import score_audit
 from .verify import verify_claims
 
 
-def run_audit(target: str, project: str | None = None, check_disk: bool = True) -> AuditResult:
-    """Library entry point: audit a transcript and return the result."""
+def run_audit(target: str, project: str | None = None, check_disk: bool = True,
+              main_only: bool = False) -> AuditResult:
+    """Library entry point: audit a transcript and return the result.
+
+    Unless main_only, the session's sub-agent and workflow transcripts are
+    discovered next to it and their command results count as evidence.
+    """
+    started = time.perf_counter()
     path = resolve_target(target, project)
     session = parse_transcript(path)
+    session.scan.files = 1
+    try:
+        session.scan.bytes = path.stat().st_size
+    except OSError:
+        pass
+    if not main_only:
+        attach_sources(session)
+        session.scan.files += len(session.sources)
+    session.scan.seconds = time.perf_counter() - started
     claims = extract_claims(session)
     result = AuditResult(
         session=session,
@@ -45,7 +64,8 @@ def run_audit(target: str, project: str | None = None, check_disk: bool = True) 
 
 def _cmd_audit(args: argparse.Namespace) -> int:
     try:
-        result = run_audit(args.target, args.project, check_disk=not args.no_disk_check)
+        result = run_audit(args.target, args.project, check_disk=not args.no_disk_check,
+                           main_only=args.main_only)
     except FileNotFoundError as exc:
         print(f"receipts: {exc}", file=sys.stderr)
         return 2
@@ -91,6 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
     audit = sub.add_parser("audit", help="audit one session transcript")
     audit.add_argument("target", help="transcript path, session-id prefix, or 'latest'")
     audit.add_argument("--project", help="filter session discovery by project name")
+    audit.add_argument("--main-only", action="store_true",
+                       help="ignore sub-agent and workflow transcripts (v0.1 behaviour)")
     audit.add_argument("--json", action="store_true", help="JSON output")
     audit.add_argument("--md", metavar="FILE", help="write Markdown report to FILE")
     audit.add_argument("--no-disk-check", action="store_true",

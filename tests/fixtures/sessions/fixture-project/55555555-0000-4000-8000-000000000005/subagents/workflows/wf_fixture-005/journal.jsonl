@@ -1,0 +1,3 @@
+{"type": "launched"}
+{"type": "started", "agentId": "f1fail", "label": "tester"}
+{"type": "result", "agentId": "f1fail", "result": "ok"}

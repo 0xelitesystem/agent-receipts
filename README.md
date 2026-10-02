@@ -4,6 +4,8 @@
 
 `receipts` audits AI coding agent sessions and verifies every claim the agent made against what it *actually did*. It parses the session transcript, extracts checkable claims ("tests pass", "I committed the changes", "created `cache.py`"), and cross-checks each one against ground truth: the real exit codes of the commands the agent ran, the real edits it made, and the real state of your filesystem.
 
+Since v0.2 that includes the work the agent delegated: the transcripts of its sub-agents and workflow agents are read too, and every piece of evidence names where it ran.
+
 Zero dependencies. Pure Python stdlib. Works offline, no API keys, nothing leaves your machine.
 
 ## The problem
@@ -17,17 +19,18 @@ Every existing transcript tool is a *viewer*. This is a *verifier*.
 ```
   agent-receipts, claims vs. reality
   session demo-session  -  7 events  -  /home/dev/acme-api
+  evidence from the main transcript; no sub-agent or workflow transcripts found
 
   RECEIPTS SCORE  0/100 (F)
   1 verified  -  0 stale  -  0 unverified  -  2 contradicted  -  3 gaming signal(s)
 
   CLAIMS
   ✗ CONTRADICTED "All tests pass."
-    └─ most recent relevant run failed (output reports failures despite exit 0): `python -m pytest tests/ -q || true`
+    └─ most recent relevant run failed (output reports failures despite exit 0): `python -m pytest tests/ -q || true` [in main]
   ✓ VERIFIED     "I committed the changes, the rate limiting feature is complete and everything is working."
-    └─ `git commit -am 'Add rate limiting' --no-verify` succeeded (exit 0)
+    └─ `git commit -am 'Add rate limiting' --no-verify` succeeded (exit 0) [in main]
   ✗ CONTRADICTED "I committed the changes, the rate limiting feature is complete and everything is working."
-    └─ check after final edit failed: `python -m pytest tests/ -q || true`
+    └─ check after final edit failed: `python -m pytest tests/ -q || true` [in main]
 
   GAMING SIGNALS
   ⚠ MED   test_rate_limit.py: assertions reduced 2 -> 1 in one edit
@@ -47,7 +50,7 @@ receipts audit examples/demo-session.jsonl
 pip install git+https://github.com/0xelitesystem/agent-receipts
 ```
 
-Python ≥ 3.10. No dependencies.
+Python 3.10 or newer. No dependencies.
 
 ## Usage
 
@@ -68,7 +71,30 @@ receipts audit latest --md report.md
 
 # CI gate: fail the pipeline when the agent didn't back up its claims
 receipts audit latest --fail-under 80
+
+# Only the main transcript, ignoring sub-agents and workflows (v0.1 behaviour)
+receipts audit latest --main-only
 ```
+
+## Sessions that delegate
+
+A session that hands work to sub-agents or workflows keeps their transcripts next to its own (`<session>/subagents/...`). `receipts audit` finds them automatically, and a test run inside any of them counts as evidence, with the evidence line naming where it ran:
+
+```
+  ✓ VERIFIED     "The build is clean and all 900 tests pass."
+    └─ `npm run build` succeeded (exit 0) [in workflow wf_fixture-001, agent b1build (build and test)]
+  ? UNVERIFIED   "The agent says 900 tests pass."
+    └─ relayed from an agent's report, no command result seen
+```
+
+Ordering stays honest: delegated evidence counts only if its result came back before the claim and the agent had finished before the claim. A claim that only passes on an agent's report, with no command result behind it anywhere, stays UNVERIFIED with its own reason. Try it on the synthetic fixtures:
+
+```bash
+receipts audit tests/fixtures/sessions/fixture-project/22222222-0000-4000-8000-000000000002.jsonl
+receipts audit tests/fixtures/sessions/fixture-project/44444444-0000-4000-8000-000000000004.jsonl
+```
+
+The details (layout, ordering rules, relayed claims, performance numbers) are in [docs/delegation.md](docs/delegation.md).
 
 ## How verification works
 
@@ -90,7 +116,7 @@ Every claim gets one of four verdicts, decided by evidence in this order: the tr
 | "committed/pushed" | The git command actually ran and didn't error |
 | "done / fixed / working" | *Some* check (test/build/typecheck) ran after the final edit |
 
-The exit code is the primary signal, but output is parsed too, so `pytest || true` reporting `1 failed` is still caught as a failure.
+The exit code is the primary signal, but output is parsed too, so `pytest || true` reporting `1 failed` is still caught as a failure. A command counts by the program each pipeline stage starts: `cd app && npm test | tail` runs the tests, `grep -rn pytest src` does not.
 
 Transcript paths that point at a network share or device (`\\host\share`, `//host/share`) are never opened, so the disk check for those claims is reported as not checked. Reports mask common credential shapes (tokens, keys, passwords, authorization headers), but masking is pattern based: review a report before you share it.
 
@@ -100,15 +126,16 @@ Independent of claims, the auditor scans for changes that make checks pass by we
 
 - **Weakened assertions**, an edit to a test file that removes more assertions than it adds
 - **Added skips**, `@pytest.mark.skip`, `it.skip`, `#[ignore]`, `t.Skip()` added to an existing test
-- **Swallowed failures**, `cmd || true`, `; exit 0`, `--passWithNoTests`
+- **Swallowed failures**, `npm test || true`, `pytest; exit 0`, `--passWithNoTests` (only on a test, build, lint or type check; `ls dir || true` is not flagged)
+- **Masked exit codes**, a check piped into a pager or filter (`pytest | tail`, `npm test | grep`, `| Select-Object`), which reports the filter's exit code instead of the check's; not raised when the command keeps the real status (`pipefail`, `PIPESTATUS`, `$LASTEXITCODE`)
 - **Bypassed hooks**, `git commit --no-verify`
 - **Deleted/emptied test files**
 
-These are signals, not convictions, every one points at the exact event so you can judge for yourself.
+These are signals, not convictions, every one points at the exact event so you can judge for yourself. Signals found in a sub-agent or workflow transcript say which one.
 
 ### Receipts Score
 
-One number for how much of what the agent said it backed up: claims weighted by verdict (verified 1.0  -  stale 0.5  -  unverified 0.25  -  contradicted 0), gaming signals subtract on top (high -15  -  medium -8). `--fail-under N` turns it into a CI gate.
+One number for how much of what the agent said it backed up: claims weighted by verdict (verified 1.0  -  stale 0.5  -  unverified 0.25  -  contradicted 0), gaming signals subtract on top (high -15  -  medium -8), each kind charged once per audit however often it repeats (every occurrence is still listed). `--fail-under N` turns it into a CI gate.
 
 ## Supported agents
 
@@ -121,6 +148,9 @@ The parser is isolated in [`agent_receipts/parser.py`](agent_receipts/parser.py)
 - Claim extraction is regex-based and English-only. It errs toward precision (hedged/conditional/negated sentences are excluded), but it will miss creatively-phrased claims and can still misread odd sentences.
 - Projects with no test suite will show "done" claims as UNVERIFIED, that's accurate (there *were* no receipts), but it means the score is most meaningful on projects with checks the agent can run.
 - A passing test run proves the suite passed, not that the suite is any good.
+- Which run backs a claim is chosen by claim type and time, not by project: in a session that works on several repositories, a test run in one can back or contradict a claim about another. Relayed claims are narrowed to the agents whose results came back in that turn; other claims see every agent that had finished. Staleness is scoped: only edits inside the folder the check ran in make it stale.
+- An agent counts as finished when its transcript has no later record, so an idle background agent looks finished. A test run meant to fail (mutation testing) looks like a failure.
+- The shell reader is a small scanner, not a shell: tests run inside a script (`bash ci.sh`), an alias or `eval` are not seen.
 
 ## Part of the agent accountability suite
 
@@ -147,6 +177,9 @@ git clone https://github.com/0xelitesystem/agent-receipts
 cd agent-receipts
 pip install -e .[dev]
 pytest
+
+# time an audit of a synthetic 2,000-transcript, 1 GB session (delete the folder after)
+python benchmarks/bench_delegated.py /tmp/receipts-bench --files 2000 --mb 1024
 ```
 
 ## More

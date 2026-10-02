@@ -23,3 +23,5 @@ jobs:
       - name: Demo audit must score 0 and gate correctly
         run: "! receipts audit examples/demo-session.jsonl --no-disk-check --fail-under 1"
         shell: bash
+      - name: Delegated fixture audit must find the workflow evidence
+        run: receipts audit tests/fixtures/sessions/fixture-project/22222222-0000-4000-8000-000000000002.jsonl --no-disk-check --fail-under 90

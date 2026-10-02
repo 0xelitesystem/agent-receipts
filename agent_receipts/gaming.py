@@ -4,6 +4,9 @@ These are signals, not convictions. A human removing a genuinely bad
 assertion looks the same as an agent deleting one to go green. Each
 signal carries a severity and points at the exact event so the reviewer
 can judge for themselves.
+
+Signals are found in the main session and in every delegated transcript;
+a signal from a sub-agent or workflow agent names where it happened.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .evidence import masking
 from .models import Event, EventKind, GamingSeverity, GamingSignal, Session
 from .redact import redact_secrets
 
@@ -27,11 +31,6 @@ _SKIP_MARKERS = re.compile(
 
 _ASSERT = re.compile(
     r"\bassert\b|\bexpect\(|\bassert[A-Z]\w*\(|\b(?:should|chai)\.|ASSERT_|EXPECT_"
-)
-
-_SWALLOW_FAILURE = re.compile(
-    r"\|\|\s*true\b|\|\|\s*exit\s+0\b|;\s*exit\s+0\s*$"
-    r"|--passWithNoTests\b|2>\s*/dev/null\s*\|\|"
 )
 
 _NO_VERIFY = re.compile(r"\bgit\s+commit\b[^\n|;&]*\s(?:--no-verify|-n)\b")
@@ -76,64 +75,69 @@ def _edit_pairs(event: Event) -> list[tuple[str, str]]:
     return []
 
 
-def detect_gaming(session: Session) -> list[GamingSignal]:
+def _quote(command: str) -> str:
+    return " ".join(redact_secrets(command).split())[:80]
+
+
+def signals_for_event(event: Event, source: str = "main") -> list[GamingSignal]:
+    """Gaming signals raised by one tool call."""
+    if event.kind is not EventKind.TOOL_CALL:
+        return []
+    index = event.index if event.source is None else None
     signals: list[GamingSignal] = []
 
+    def add(kind: str, severity: GamingSeverity, description: str) -> None:
+        signals.append(GamingSignal(kind=kind, severity=severity,
+                                    description=description,
+                                    event_index=index, source=source))
+
+    command = event.command
+    if command:
+        if _NO_VERIFY.search(command):
+            add("no_verify_commit", GamingSeverity.HIGH,
+                "commit made with --no-verify (hooks bypassed)")
+        masks = masking(command)
+        swallowed = [m for m in masks if m[0] == "swallowed_failure"]
+        if swallowed:
+            add("swallowed_failure", GamingSeverity.HIGH,
+                f"command masks its own failure: `{_quote(swallowed[0][2])}`")
+        piped = [m for m in masks if m[0] == "masked_exit_code"]
+        if piped:
+            add("masked_exit_code", GamingSeverity.MEDIUM,
+                f"check piped into `{piped[0][1][2:]}`, so its exit code is lost: "
+                f"`{_quote(piped[0][2])}`")
+        if _deletes_test_file(command):
+            add("deleted_test_file", GamingSeverity.HIGH,
+                "shell command deletes a test file")
+        return signals
+
+    if not (event.is_file_edit() and _is_test_path(event.file_path)):
+        return signals
+    name = Path(event.file_path).name
+
+    for old, new in _edit_pairs(event):
+        old_asserts = len(_ASSERT.findall(old))
+        new_asserts = len(_ASSERT.findall(new))
+        if old_asserts > new_asserts:
+            add("weakened_assertions", GamingSeverity.MEDIUM,
+                f"{name}: assertions reduced {old_asserts} → {new_asserts} in one edit")
+        if _SKIP_MARKERS.search(new) and not _SKIP_MARKERS.search(old):
+            add("added_skip", GamingSeverity.MEDIUM,
+                f"{name}: skip/xfail marker added to a test")
+
+    if event.tool_name == "Write":
+        content = str(event.tool_input.get("content", ""))
+        if len(content.strip()) == 0:
+            add("emptied_test_file", GamingSeverity.HIGH,
+                f"{name}: test file overwritten with empty content")
+    return signals
+
+
+def detect_gaming(session: Session) -> list[GamingSignal]:
+    """Signals from the main session, then from each delegated transcript."""
+    signals: list[GamingSignal] = []
     for event in session.events:
-        if event.kind is not EventKind.TOOL_CALL:
-            continue
-
-        command = event.command
-        if command:
-            if _NO_VERIFY.search(command):
-                signals.append(GamingSignal(
-                    kind="no_verify_commit", severity=GamingSeverity.HIGH,
-                    description="commit made with --no-verify (hooks bypassed)",
-                    event_index=event.index,
-                ))
-            if _SWALLOW_FAILURE.search(command):
-                signals.append(GamingSignal(
-                    kind="swallowed_failure", severity=GamingSeverity.HIGH,
-                    description=f"command masks its own failure: "
-                                f"`{' '.join(redact_secrets(command).split())[:80]}`",
-                    event_index=event.index,
-                ))
-            if _deletes_test_file(command):
-                signals.append(GamingSignal(
-                    kind="deleted_test_file", severity=GamingSeverity.HIGH,
-                    description="shell command deletes a test file",
-                    event_index=event.index,
-                ))
-            continue
-
-        if not (event.is_file_edit() and _is_test_path(event.file_path)):
-            continue
-        name = Path(event.file_path).name
-
-        for old, new in _edit_pairs(event):
-            old_asserts = len(_ASSERT.findall(old))
-            new_asserts = len(_ASSERT.findall(new))
-            if old_asserts > new_asserts:
-                signals.append(GamingSignal(
-                    kind="weakened_assertions", severity=GamingSeverity.MEDIUM,
-                    description=f"{name}: assertions reduced "
-                                f"{old_asserts} → {new_asserts} in one edit",
-                    event_index=event.index,
-                ))
-            if _SKIP_MARKERS.search(new) and not _SKIP_MARKERS.search(old):
-                signals.append(GamingSignal(
-                    kind="added_skip", severity=GamingSeverity.MEDIUM,
-                    description=f"{name}: skip/xfail marker added to a test",
-                    event_index=event.index,
-                ))
-
-        if event.tool_name == "Write":
-            content = str(event.tool_input.get("content", ""))
-            if len(content.strip()) == 0:
-                signals.append(GamingSignal(
-                    kind="emptied_test_file", severity=GamingSeverity.HIGH,
-                    description=f"{name}: test file overwritten with empty content",
-                    event_index=event.index,
-                ))
-
+        signals.extend(signals_for_event(event))
+    for source in session.sources:
+        signals.extend(source.gaming)
     return signals

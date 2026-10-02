@@ -188,7 +188,7 @@ def test_local_disk_check_still_works(tmp_path):
     by_detail = {f.claim.detail: f for f in findings
                  if f.claim.type is ClaimType.FILE_CREATED}
     assert by_detail["cache.py"].verdict is Verdict.VERIFIED
-    assert by_detail["cache.py"].evidence.endswith("and file exists on disk")
+    assert "and file exists on disk [in main]" in by_detail["cache.py"].evidence
     assert by_detail["gone.py"].verdict is Verdict.CONTRADICTED
 
 

@@ -3,6 +3,9 @@
 Everything the auditor reasons about is one of these shapes:
 a Session is an ordered list of Events (assistant text or tool calls),
 Claims are extracted from text events, and Findings are the verdicts.
+A Session can also carry Sources: the transcripts of the sub-agents and
+workflow agents it delegated to, which hold only the tool calls that
+can count as evidence (checks, git commands, file writes).
 """
 
 from __future__ import annotations
@@ -35,6 +38,15 @@ class Event:
     output: str = ""
     is_error: bool = False
     exit_code: int | None = None
+    cwd: str = ""  # working directory the tool call started in
+
+    # Ordering across transcripts. `t` is seconds since the epoch: for a
+    # main-session event, the record time made non-decreasing; for an
+    # event in a delegated transcript, the time its result came back.
+    t: float = float("-inf")
+    source: "Source | None" = None  # None means the main session
+    failure_hint: bool = False  # output reported failures (kept when output is dropped)
+    check_types: frozenset = frozenset()  # ClaimTypes this command can back
 
     @property
     def command(self) -> str:
@@ -53,6 +65,47 @@ class Event:
 
 
 @dataclass
+class Source:
+    """A delegated transcript: a sub-agent, or one agent of a workflow run."""
+
+    kind: str  # "subagent" or "workflow_agent"
+    path: str
+    agent_id: str = ""
+    run_id: str = ""
+    label: str = ""  # the agent's description, redacted and trimmed
+    finished: float | None = None  # time of the transcript's last record
+    events: list[Event] = field(default_factory=list)
+    gaming: list["GamingSignal"] = field(default_factory=list)
+    size: int = 0
+
+    def describe(self) -> str:
+        where = (f"workflow {self.run_id}, agent {self.agent_id}"
+                 if self.kind == "workflow_agent" else f"sub-agent {self.agent_id}")
+        return where + (f" ({self.label})" if self.label else "")
+
+    def matches(self, keys: set[tuple[str, str]]) -> bool:
+        return (("agent", self.agent_id) in keys
+                or (bool(self.run_id) and ("run", self.run_id) in keys))
+
+
+@dataclass
+class Delivery:
+    """A delegated result reaching the main session (agent or workflow done)."""
+
+    index: int  # number of main events before it
+    key: tuple[str, str]  # ("agent", agentId) or ("run", runId)
+
+
+@dataclass
+class ScanStats:
+    files: int = 0
+    subagents: int = 0
+    workflow_agents: int = 0
+    bytes: int = 0
+    seconds: float = 0.0
+
+
+@dataclass
 class Session:
     """A parsed agent session transcript."""
 
@@ -65,6 +118,13 @@ class Session:
     events: list[Event] = field(default_factory=list)
     first_timestamp: str = ""
     last_timestamp: str = ""
+    # Where each human prompt starts (index of the next event), and where
+    # delegated results came back, for telling a relayed claim apart.
+    prompt_starts: list[int] = field(default_factory=list)
+    deliveries: list[Delivery] = field(default_factory=list)
+    sources: list[Source] = field(default_factory=list)
+    main_only: bool = True
+    scan: ScanStats = field(default_factory=ScanStats)
 
     def tool_calls(self) -> list[Event]:
         return [e for e in self.events if e.kind is EventKind.TOOL_CALL]
@@ -108,7 +168,9 @@ class Finding:
     claim: Claim
     verdict: Verdict
     evidence: str = ""  # human-readable: what we checked and what we saw
-    evidence_index: int | None = None  # event index of the deciding evidence
+    evidence_index: int | None = None  # main event index of the deciding evidence
+    evidence_source: str = ""  # where the deciding evidence ran: "main" or a sub-agent
+    relayed: bool = False  # the claim passes on a delegated agent's report
 
 
 class GamingSeverity(enum.Enum):
@@ -124,7 +186,8 @@ class GamingSignal:
     kind: str
     severity: GamingSeverity
     description: str
-    event_index: int
+    event_index: int | None  # main event index, None in a delegated transcript
+    source: str = "main"
 
 
 @dataclass

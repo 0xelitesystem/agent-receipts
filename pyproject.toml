@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-receipts"
-version = "0.1.0"
+version = "0.2.0"
 description = "Audit what your coding agent claimed against what it actually did."
 readme = "README.md"
 license = "MIT"
