@@ -82,7 +82,7 @@ A session that hands work to sub-agents or workflows keeps their transcripts nex
 
 ```
   ✓ VERIFIED     "The build is clean and all 900 tests pass."
-    └─ `npm run build` succeeded (exit 0) [in workflow wf_fixture-001, agent b1build (build and test)]
+    └─ `npm run build` succeeded (exit 0) [in workflow wf_fx-001, agent b1build (build and test)]
   ? UNVERIFIED   "The agent says 900 tests pass."
     └─ relayed from an agent's report, no command result seen
 ```
@@ -90,8 +90,8 @@ A session that hands work to sub-agents or workflows keeps their transcripts nex
 Ordering stays honest: delegated evidence counts only if its result came back before the claim and the agent had finished before the claim. A claim that only passes on an agent's report, with no command result behind it anywhere, stays UNVERIFIED with its own reason. Try it on the synthetic fixtures:
 
 ```bash
-receipts audit tests/fixtures/sessions/fixture-project/22222222-0000-4000-8000-000000000002.jsonl
-receipts audit tests/fixtures/sessions/fixture-project/44444444-0000-4000-8000-000000000004.jsonl
+receipts audit tests/fixtures/sessions/proj/s2-wf.jsonl
+receipts audit tests/fixtures/sessions/proj/s4-relay.jsonl
 ```
 
 The details (layout, ordering rules, relayed claims, performance numbers) are in [docs/delegation.md](docs/delegation.md).

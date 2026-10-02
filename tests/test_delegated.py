@@ -17,15 +17,15 @@ from agent_receipts.parser import epoch
 from agent_receipts.verify import RELAYED_REASON
 
 FIXTURES = Path(__file__).parent / "fixtures"
-PROJECT = FIXTURES / "sessions" / "fixture-project"
+PROJECT = FIXTURES / "sessions" / "proj"
 
-AGENT_SYNC = PROJECT / "11111111-0000-4000-8000-000000000001.jsonl"
-WORKFLOW = PROJECT / "22222222-0000-4000-8000-000000000002.jsonl"
-ORDERING = PROJECT / "33333333-0000-4000-8000-000000000003.jsonl"
-RELAY_ONLY = PROJECT / "44444444-0000-4000-8000-000000000004.jsonl"
-CONTRADICTED = PROJECT / "55555555-0000-4000-8000-000000000005.jsonl"
-STALE = PROJECT / "66666666-0000-4000-8000-000000000006.jsonl"
-SECRETS = PROJECT / "77777777-0000-4000-8000-000000000007.jsonl"
+AGENT_SYNC = PROJECT / "s1-sync.jsonl"
+WORKFLOW = PROJECT / "s2-wf.jsonl"
+ORDERING = PROJECT / "s3-order.jsonl"
+RELAY_ONLY = PROJECT / "s4-relay.jsonl"
+CONTRADICTED = PROJECT / "s5-red.jsonl"
+STALE = PROJECT / "s6-stale.jsonl"
+SECRETS = PROJECT / "s7-secret.jsonl"
 
 
 def _audit(path, **kwargs):
@@ -65,7 +65,7 @@ def test_main_only_flag_on_the_cli(capsys):
 
 def test_workflow_agent_runs_back_relayed_claims():
     result = _audit(WORKFLOW)
-    where = "workflow wf_fixture-001, agent b1build (build and test)"
+    where = "workflow wf_fx-001, agent b1build (build and test)"
     for claim_type in (ClaimType.TESTS_PASS, ClaimType.BUILD_OK):
         finding = _only(result, claim_type)
         assert finding.verdict is Verdict.VERIFIED
@@ -90,7 +90,7 @@ def test_failed_delegated_run_contradicts():
     finding = _only(_audit(CONTRADICTED))
     assert finding.verdict is Verdict.CONTRADICTED
     assert "exit 1" in finding.evidence
-    assert "workflow wf_fixture-005, agent f1fail" in finding.evidence
+    assert "workflow wf_fx-005, agent f1fail" in finding.evidence
 
 
 def test_delegated_edit_after_the_run_makes_the_claim_stale():
@@ -240,6 +240,6 @@ def test_json_report_names_sources(capsys):
     assert data["version"] == "0.2.0"
     assert data["scope"]["workflow_agent_transcripts"] == 1
     assert {c["evidence_source"] for c in data["claims"]} == {
-        "workflow wf_fixture-001, agent b1build (build and test)"}
+        "workflow wf_fx-001, agent b1build (build and test)"}
     assert data["gaming_signals"][0]["kind"] == "masked_exit_code"
     assert data["gaming_signals"][0]["event"] is None

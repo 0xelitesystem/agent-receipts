@@ -33,7 +33,7 @@ line says where it ran:
 
 ```
 ✓ VERIFIED     "The build is clean and all 900 tests pass."
-  └─ `npm run build` succeeded (exit 0) [in workflow wf_fixture-001, agent b1build (build and test)]
+  └─ `npm run build` succeeded (exit 0) [in workflow wf_fx-001, agent b1build (build and test)]
 ```
 
 The description in brackets comes from the agent's `.meta.json`, trimmed to

@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).parent / "sessions" / "fixture-project"
+ROOT = Path(__file__).parent / "sessions" / "proj"
 CWD = "/work/app"
 
 
@@ -123,7 +123,7 @@ def save(session: str, main: Transcript, subs=(), runs=()) -> None:
 
 def agent_sync() -> None:
     """A synchronous sub-agent ran the tests; main relays the result."""
-    sid = "11111111-0000-4000-8000-000000000001"
+    sid = "s1-sync"
     main = Transcript(sid, False)
     main.prompt(0, "Fix the parser and make sure the tests pass.")
     main.tool(1, "tA1", "Agent", {"description": "fix parser", "prompt": "Fix it."})
@@ -140,14 +140,14 @@ def agent_sync() -> None:
 
 def workflow_async() -> None:
     """A background workflow built and tested; main relays after the notification."""
-    sid = "22222222-0000-4000-8000-000000000002"
+    sid = "s2-wf"
     main = Transcript(sid, False)
     main.prompt(0, "Build and test the release.")
     main.tool(1, "tW1", "Workflow", {"description": "build and test"})
     main.result(2, "tW1", "Workflow launched in background. Task ID: wtask1\n"
-                "Transcript dir: x/subagents/workflows/wf_fixture-001",
+                "Transcript dir: x/subagents/workflows/wf_fx-001",
                 tool_use_result={"status": "async_launched", "taskId": "wtask1",
-                                 "runId": "wf_fixture-001"})
+                                 "runId": "wf_fx-001"})
     main.notify(50, "wtask1", "tW1", "built, 900 tests pass")
     main.say(51, "The build is clean and all 900 tests pass.")
     agent = Transcript(sid, True, "b1build")
@@ -155,12 +155,12 @@ def workflow_async() -> None:
     agent.run(5, "w1", "npm run build", "built in 3s")
     agent.run(15, "w2", "cd /work/app && npm test 2>&1 | tail -3", "Tests: 900 passed, 900 total")
     agent.say(30, "built, 900 tests pass")
-    save(sid, main, runs=[("wf_fixture-001", [("b1build", "build and test", agent)])])
+    save(sid, main, runs=[("wf_fx-001", [("b1build", "build and test", agent)])])
 
 
 def ordering() -> None:
     """Delegated evidence only counts once it finished before the claim."""
-    sid = "33333333-0000-4000-8000-000000000003"
+    sid = "s3-order"
     main = Transcript(sid, False)
     main.prompt(0, "Run the tests in the background.")
     main.tool(1, "tA1", "Agent", {"description": "late tests", "prompt": "Test."})
@@ -183,7 +183,7 @@ def ordering() -> None:
 
 def relay_only() -> None:
     """An agent reported passing tests but never ran a command."""
-    sid = "44444444-0000-4000-8000-000000000004"
+    sid = "s4-relay"
     main = Transcript(sid, False)
     main.prompt(0, "Check the tests.")
     main.tool(1, "tA1", "Agent", {"description": "talker", "prompt": "Check."})
@@ -200,25 +200,25 @@ def relay_only() -> None:
 
 def contradicted() -> None:
     """A workflow agent's test run failed; main says the tests pass."""
-    sid = "55555555-0000-4000-8000-000000000005"
+    sid = "s5-red"
     main = Transcript(sid, False)
     main.prompt(0, "Test it.")
     main.tool(1, "tW1", "Workflow", {"description": "test"})
     main.result(2, "tW1", "Workflow launched in background. Task ID: wtask5",
                 tool_use_result={"status": "async_launched", "taskId": "wtask5",
-                                 "runId": "wf_fixture-005"})
+                                 "runId": "wf_fx-005"})
     main.notify(40, "wtask5", "tW1", "tests pass")
     main.say(41, "All tests pass.")
     agent = Transcript(sid, True, "f1fail")
     agent.prompt(3, "Test.")
     agent.run(5, "w1", "pytest -q", "2 failed, 10 passed", exit_code=1)
     agent.say(20, "tests pass")
-    save(sid, main, runs=[("wf_fixture-005", [("f1fail", "tester", agent)])])
+    save(sid, main, runs=[("wf_fx-005", [("f1fail", "tester", agent)])])
 
 
 def stale() -> None:
     """A sub-agent tested, then edited code, and main claims the tests pass."""
-    sid = "66666666-0000-4000-8000-000000000006"
+    sid = "s6-stale"
     main = Transcript(sid, False)
     main.prompt(0, "Fix and test.")
     main.tool(1, "tA1", "Agent", {"description": "fixer", "prompt": "Fix."})
@@ -235,7 +235,7 @@ def stale() -> None:
 
 def secrets() -> None:
     """Credentials in a sub-agent's commands and description stay out of reports."""
-    sid = "77777777-0000-4000-8000-000000000007"
+    sid = "s7-secret"
     main = Transcript(sid, False)
     main.prompt(0, "Test with the real token.")
     main.tool(1, "tA1", "Agent", {"description": "secret", "prompt": "Test."})
