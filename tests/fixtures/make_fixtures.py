@@ -89,6 +89,36 @@ class Transcript:
         self._add(_base("user", at, self.session, self.sidechain,
                         message={"role": "user", "content": text}))
 
+    def background(self, at: int, tid: str, command: str, task_id: str) -> None:
+        """A shell command sent to the background: the result only says it started."""
+        self.tool(at, tid, "Bash", {"command": command, "run_in_background": True})
+        self.result(at + 1, tid,
+                    f"Command running in background with ID: {task_id}. "
+                    f"Output is being written to: /tmp/tasks/{task_id}.output",
+                    tool_use_result={"stdout": "", "stderr": "", "interrupted": False,
+                                     "backgroundTaskId": task_id})
+
+    def bg_notice(self, at: int, task_id: str, tool_use_id: str, code: int,
+                  shape: str = "user") -> None:
+        """The completion notice of a background command, in one of its shapes."""
+        ending = (f"completed (exit code {code})" if code == 0
+                  else f"failed with exit code {code}")
+        text = (f"<task-notification>\n<task-id>{task_id}</task-id>\n"
+                f"<tool-use-id>{tool_use_id}</tool-use-id>\n"
+                f"<status>{'completed' if code == 0 else 'failed'}</status>\n"
+                f"<summary>Background command completed: {ending}</summary>\n"
+                f"</task-notification>")
+        if shape == "queue":
+            self._add({"type": "queue-operation", "operation": "enqueue",
+                       "timestamp": ts(at), "sessionId": self.session, "content": text})
+        elif shape == "attachment":
+            self._add(_base("attachment", at, self.session, self.sidechain,
+                            attachment={"type": "queued_command", "prompt": text,
+                                        "commandMode": "task-notification"}))
+        else:
+            self._add(_base("user", at, self.session, self.sidechain,
+                            message={"role": "user", "content": text}))
+
     def lines(self) -> str:
         return "\n".join(json.dumps(r, sort_keys=True) for r in self.records) + "\n"
 
@@ -99,12 +129,16 @@ def write(path: Path, text: str) -> None:
         fh.write(text)
 
 
-def save(session: str, main: Transcript, subs=(), runs=()) -> None:
-    """subs: [(agent_id, description, Transcript)]; runs: [(run_id, [(id, desc, T)])]."""
+def save(session: str, main: Transcript, subs=(), runs=(), tails=None) -> None:
+    """subs: [(agent_id, description, Transcript)]; runs: [(run_id, [(id, desc, T)])].
+
+    tails: {agent_id: raw text appended to that sub-agent's transcript}.
+    """
     write(ROOT / f"{session}.jsonl", main.lines())
     base = ROOT / session / "subagents"
     for agent_id, desc, transcript in subs:
-        write(base / f"agent-{agent_id}.jsonl", transcript.lines())
+        write(base / f"agent-{agent_id}.jsonl",
+              transcript.lines() + (tails or {}).get(agent_id, ""))
         write(base / f"agent-{agent_id}.meta.json",
               json.dumps({"agentType": "general", "description": desc}) + "\n")
     for run_id, agents in runs:
@@ -250,7 +284,105 @@ def secrets() -> None:
     save(sid, main, subs=[("h1secret", "uses api_key=sk-proj-FIXTURE0123456789abcdef", sub)])
 
 
-SCENARIOS = [agent_sync, workflow_async, ordering, relay_only, contradicted, stale, secrets]
+def background_main() -> None:
+    """Main sends the tests to the background; only the completion notice counts."""
+    sid = "s8-bg"
+    main = Transcript(sid, False)
+    main.prompt(0, "Run the tests in the background.")
+    main.background(1, "tB1", "npm test", "bgt8")
+    main.say(3, "All tests pass.")  # nothing has finished yet
+    main.bg_notice(20, "bgt8", "tB1", 0, shape="queue")
+    main.bg_notice(21, "bgt8", "tB1", 0, shape="attachment")
+    main.say(22, "The tests pass now.")
+    main.background(30, "tB2", "pytest -q", "bgt9")
+    main.bg_notice(40, "bgt9", "tB2", 1, shape="user")
+    main.say(41, "Tests pass.")
+    save(sid, main)
+
+
+def background_sub() -> None:
+    """Sub-agents send the tests to the background: one never finishes, one fails."""
+    sid = "s9-bgsub"
+    main = Transcript(sid, False)
+    main.prompt(0, "Test it.")
+    main.tool(1, "tA1", "Agent", {"description": "starter", "prompt": "Test."})
+    main.result(20, "tA1", "Started the tests.\nagentId: i1start",
+                tool_use_result={"status": "completed", "agentId": "i1start"})
+    main.say(21, "All tests pass.")
+    main.prompt(30, "Test it again.")
+    main.tool(31, "tA2", "Agent", {"description": "waiter", "prompt": "Test."})
+    main.result(60, "tA2", "Done.\nagentId: j1wait",
+                tool_use_result={"status": "completed", "agentId": "j1wait"})
+    main.say(61, "All tests pass.")
+    start = Transcript(sid, True, "i1start")
+    start.prompt(1, "Test.")
+    start.background(2, "s1", "npm test", "bgi1")
+    start.say(5, "Started the tests.")
+    wait = Transcript(sid, True, "j1wait")
+    wait.prompt(31, "Test.")
+    wait.background(32, "w1", "pytest -q", "bgj1")
+    wait.bg_notice(50, "bgj1", "w1", 1)
+    wait.say(55, "Done.")
+    save(sid, main, subs=[("i1start", "starter", start), ("j1wait", "waiter", wait)])
+
+
+def turn_boundary() -> None:
+    """A delivery that is the last record of a turn belongs to that turn only."""
+    sid = "s10-turn"
+    main = Transcript(sid, False)
+    main.prompt(0, "Test, then report.")
+    main.tool(1, "tA1", "Agent", {"description": "tester", "prompt": "Test."})
+    main.result(20, "tA1", "5 passed.\nagentId: k1test",
+                tool_use_result={"status": "completed", "agentId": "k1test"})
+    main.tool(21, "tA2", "Agent", {"description": "talker", "prompt": "Talk."})
+    main.result(40, "tA2", "Nothing to run.\nagentId: k2talk",
+                tool_use_result={"status": "completed", "agentId": "k2talk"})
+    main.prompt(50, "And the tests?")
+    main.say(51, "All tests pass.")
+    test = Transcript(sid, True, "k1test")
+    test.prompt(1, "Test.")
+    test.run(2, "s1", "pytest -q", "5 passed")
+    test.say(15, "5 passed.")
+    talk = Transcript(sid, True, "k2talk")
+    talk.prompt(21, "Talk.")
+    talk.say(30, "Nothing to run.")
+    save(sid, main, subs=[("k1test", "tester", test), ("k2talk", "talker", talk)])
+
+
+def still_writing() -> None:
+    """Agents still at work after the claim: last record has no time, or is cut off."""
+    sid = "s11-live"
+    main = Transcript(sid, False)
+    main.prompt(0, "Test.")
+    main.say(21, "All tests pass.")
+    notime = Transcript(sid, True, "l1late")
+    notime.prompt(1, "Test.")
+    notime.run(2, "s1", "pytest -q", "3 passed", took=1)
+    notime.say(60, "still going")
+    cut = Transcript(sid, True, "l2cut")
+    cut.prompt(1, "Test.")
+    cut.run(2, "s1", "pytest -q", "3 passed", took=1)
+    save(sid, main, subs=[("l1late", "no time", notime), ("l2cut", "cut off", cut)],
+         tails={"l1late": json.dumps({"type": "summary", "summary": "x"}) + "\n",
+                "l2cut": '{"type": "assistant", "timestamp": "' + ts(70) + '", "mess'})
+
+
+def parallel_edit() -> None:
+    """A background agent edits the code after main's passing run, before the claim."""
+    sid = "s12-pedit"
+    main = Transcript(sid, False)
+    main.prompt(0, "Test while the other agent works.")
+    main.run(1, "m1", "pytest -q", "5 passed", took=2)
+    main.say(30, "All tests pass.")
+    other = Transcript(sid, True, "m2edit")
+    other.prompt(5, "Refactor.")
+    other.edit(9, "s1", f"{CWD}/src/core.py")
+    other.say(60, "still refactoring")
+    save(sid, main, subs=[("m2edit", "refactor", other)])
+
+
+SCENARIOS = [agent_sync, workflow_async, ordering, relay_only, contradicted, stale, secrets,
+             background_main, background_sub, turn_boundary, still_writing, parallel_edit]
 
 
 def main() -> None:

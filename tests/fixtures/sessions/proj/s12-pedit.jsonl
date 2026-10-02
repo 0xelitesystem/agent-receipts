@@ -1,0 +1,4 @@
+{"cwd": "/work/app", "isSidechain": false, "message": {"content": "Test while the other agent works.", "role": "user"}, "sessionId": "s12-pedit", "timestamp": "2026-07-01T10:00:00.000Z", "type": "user"}
+{"cwd": "/work/app", "isSidechain": false, "message": {"content": [{"id": "m1", "input": {"command": "pytest -q"}, "name": "Bash", "type": "tool_use"}], "role": "assistant"}, "sessionId": "s12-pedit", "timestamp": "2026-07-01T10:00:01.000Z", "type": "assistant"}
+{"cwd": "/work/app", "isSidechain": false, "message": {"content": [{"content": "5 passed", "is_error": false, "tool_use_id": "m1", "type": "tool_result"}], "role": "user"}, "sessionId": "s12-pedit", "timestamp": "2026-07-01T10:00:03.000Z", "type": "user"}
+{"cwd": "/work/app", "isSidechain": false, "message": {"content": [{"text": "All tests pass.", "type": "text"}], "role": "assistant"}, "sessionId": "s12-pedit", "timestamp": "2026-07-01T10:00:30.000Z", "type": "assistant"}

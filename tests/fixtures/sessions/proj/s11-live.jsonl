@@ -1,0 +1,2 @@
+{"cwd": "/work/app", "isSidechain": false, "message": {"content": "Test.", "role": "user"}, "sessionId": "s11-live", "timestamp": "2026-07-01T10:00:00.000Z", "type": "user"}
+{"cwd": "/work/app", "isSidechain": false, "message": {"content": [{"text": "All tests pass.", "type": "text"}], "role": "assistant"}, "sessionId": "s11-live", "timestamp": "2026-07-01T10:00:21.000Z", "type": "assistant"}

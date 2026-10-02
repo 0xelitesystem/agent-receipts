@@ -103,9 +103,11 @@ def signals_for_event(event: Event, source: str = "main") -> list[GamingSignal]:
                 f"command masks its own failure: `{_quote(swallowed[0][2])}`")
         piped = [m for m in masks if m[0] == "masked_exit_code"]
         if piped:
+            how = piped[0][1]
+            lead = (f"check piped into `{how[2:]}`" if how.startswith("| ")
+                    else f"check followed by `{how[2:]}`")
             add("masked_exit_code", GamingSeverity.MEDIUM,
-                f"check piped into `{piped[0][1][2:]}`, so its exit code is lost: "
-                f"`{_quote(piped[0][2])}`")
+                f"{lead}, so its exit code is lost: `{_quote(piped[0][2])}`")
         if _deletes_test_file(command):
             add("deleted_test_file", GamingSeverity.HIGH,
                 "shell command deletes a test file")

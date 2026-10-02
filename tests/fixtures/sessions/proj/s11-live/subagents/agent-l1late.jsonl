@@ -1,0 +1,5 @@
+{"agentId": "l1late", "cwd": "/work/app", "isSidechain": true, "message": {"content": "Test.", "role": "user"}, "sessionId": "s11-live", "timestamp": "2026-07-01T10:00:01.000Z", "type": "user"}
+{"agentId": "l1late", "cwd": "/work/app", "isSidechain": true, "message": {"content": [{"id": "s1", "input": {"command": "pytest -q"}, "name": "Bash", "type": "tool_use"}], "role": "assistant"}, "sessionId": "s11-live", "timestamp": "2026-07-01T10:00:02.000Z", "type": "assistant"}
+{"agentId": "l1late", "cwd": "/work/app", "isSidechain": true, "message": {"content": [{"content": "3 passed", "is_error": false, "tool_use_id": "s1", "type": "tool_result"}], "role": "user"}, "sessionId": "s11-live", "timestamp": "2026-07-01T10:00:03.000Z", "type": "user"}
+{"agentId": "l1late", "cwd": "/work/app", "isSidechain": true, "message": {"content": [{"text": "still going", "type": "text"}], "role": "assistant"}, "sessionId": "s11-live", "timestamp": "2026-07-01T10:01:00.000Z", "type": "assistant"}
+{"type": "summary", "summary": "x"}

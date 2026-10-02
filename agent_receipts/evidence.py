@@ -59,28 +59,79 @@ CHECK_TYPES = frozenset({
 })
 
 # "N failed" with N > 0, or framework-specific hard failure markers.
+# A bare FAILED counts only in capitals (pytest's marker): a passing cargo
+# run prints "0 failed", which must not read as a failure.
 FAILURE_IN_OUTPUT = re.compile(
     r"\b([1-9]\d*)\s+fail(?:ed|ures?)\b"
-    r"|\bFAILED\b|\bTests?\s+failed\b|\bBUILD\s+FAILED\b"
+    r"|(?-i:\bFAILED\b)|\bTests?\s+failed\b|\bBUILD\s+FAILED\b"
     r"|test result: FAILED"
     r"|^\S*\s*fail\s+[1-9]\d*\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
+# A positive pass marker: what a passing run prints, framework by
+# framework. A run whose exit code a pipe hid backs a claim only when its
+# output shows one of these (and no failure marker).
+PASS_IN_OUTPUT = re.compile(
+    r"\b[1-9]\d*\s+(?:passed|passing)\b"                 # pytest, jest, vitest, mocha
+    r"|^\S*\s*fail\s+0\s*$"                              # node --test, TAP: "# fail 0"
+    r"|test result: ok\b"                                # cargo test
+    r"|^OK(?:\s+\(.*\))?\s*$"                            # unittest, phpunit
+    r"|^ok\s+\S+|^PASS\s*$"                              # go test
+    r"|\bPassed!|\b\d+ examples?, 0 failures\b"          # dotnet test, rspec
+    r"|\bAll checks passed\b|\bSuccess: no issues found\b"  # ruff, mypy
+    r"|\bFound 0 errors\b|\b0 errors?, 0 warnings?\b"    # tsc, pyright
+    r"|\bBUILD SUCCESS(?:FUL)?\b|\bBuild succeeded\b|\bbuilt in \d"
+    r"|\bcompiled successfully\b|\bSuccessfully built\b|^\s*Finished\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Flags that make a check program print something and exit without
+# running the check: a version or help probe, a listing, a dry run.
+_READ_ONLY_FLAGS = frozenset({
+    "--version", "-V", "--help", "-h", "--collect-only", "--co",
+    "--listTests", "--list-tests", "--dry-run", "--no-run", "--showConfig",
+})
+_MAKE_DRY_RUN = frozenset({"-n", "--just-print", "--recon"})
+_MAKE_PROGRAMS = frozenset({"make", "gmake", "nmake", "mingw32-make", "ninja"})
+
 _SWALLOW_TAIL = re.compile(
     r"(?:true|:|\$true|exit\s+0|cmd\s+/c\s+exit\s+0)", re.IGNORECASE)
 _EXIT_ZERO = re.compile(r"exit\s+0", re.IGNORECASE)
 _PASS_WITH_NO_TESTS = re.compile(r"--passWithNoTests\b")
-# A command that keeps or inspects the real status of a pipeline.
-_STATUS_KEPT = re.compile(r"pipefail|PIPESTATUS|LASTEXITCODE", re.IGNORECASE)
+# Turning pipefail ON (set -o pipefail, set -euo pipefail), not +o.
+_PIPEFAIL_ON = re.compile(r"^set\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*o\s+pipefail\b")
+# `set -e` (or -eu, -euo ...): a failing statement stops the script.
+_ERREXIT_ON = re.compile(r"^set\s+(?:-[A-Za-z]+\s+)*-[A-Za-df-z]*e")
+# Reading the real status after the pipeline or statement.
+_STATUS_READ = re.compile(
+    r"\$\{?PIPESTATUS\b|\bexit\s+\$LASTEXITCODE\b|\bif\s*\(\s*\$LASTEXITCODE\b"
+    r"|\$\?", re.IGNORECASE)
+# What follows `||` and still fails: exit with a non-zero or no code,
+# return non-zero, false, throw.
+_FAILS_AGAIN = re.compile(
+    r"\b(?:exit|return)\b(?!\s+(?:/b\s+)?0\b)|\bfalse\b|\bthrow\b", re.IGNORECASE)
+# Words that close a block; they do not set the status themselves.
+_BLOCK_CLOSERS = frozenset({"done", "fi", "esac", "}", ")", "end"})
+
+
+def _read_only(norm: str) -> bool:
+    words = [w.strip("\"'") for w in norm.split()]
+    if any(w in _READ_ONLY_FLAGS for w in words[1:]):
+        return True
+    return bool(words) and words[0] in _MAKE_PROGRAMS and any(
+        w in _MAKE_DRY_RUN for w in words[1:])
 
 
 def stage_types(stage: str) -> frozenset[ClaimType]:
     norm = normalize_stage(stage)
     if not norm:
         return frozenset()
-    return frozenset(t for t, pattern in COMMAND_EVIDENCE.items()
-                     if pattern.match(norm))
+    found = frozenset(t for t, pattern in COMMAND_EVIDENCE.items()
+                      if pattern.match(norm))
+    if found & CHECK_TYPES and _read_only(norm):
+        found -= CHECK_TYPES
+    return found
 
 
 def check_types(command: str) -> frozenset[ClaimType]:
@@ -99,46 +150,104 @@ def _has_check(stages: list[str]) -> bool:
     return any(stage_types(s) & CHECK_TYPES for s in stages if s)
 
 
+def _text(statement) -> str:
+    return " | ".join(s for s in statement.stages if s)
+
+
+def _sets_status(statement) -> bool:
+    """False for a bare block closer (`done`, `fi`, `}`), which only ends a block."""
+    stages = [s for s in statement.stages if s]
+    return not (len(stages) == 1 and stages[0].strip() in _BLOCK_CLOSERS)
+
+
 def masking(command: str) -> list[tuple[str, str, str]]:
     """Ways this command hides the exit status of a test, build or check.
 
     Returns (kind, how, snippet) triples, where snippet is the part of the
     command that does it. kind is "masked_exit_code" for a pipeline
     whose last stage is a pager or filter, "swallowed_failure" for
-    `|| true`, `; exit 0` and --passWithNoTests. Read-only diagnostics
-    (`grep x f | head`, `ls d || true`) are not reported.
+    `|| <anything that does not fail again>`, for a check followed by `;`
+    or a newline and then only other commands, for `; exit 0` and for
+    --passWithNoTests. The real status counts as kept when pipefail (or,
+    for a sequence, `set -e`) is turned on before the check, or
+    PIPESTATUS, `$?` or `$LASTEXITCODE` is read after it. Read-only
+    diagnostics (`grep x f | head`, `ls d || true`, `pytest --version |
+    head`) are not reported.
     """
     found: list[tuple[str, str, str]] = []
-    if _PASS_WITH_NO_TESTS.search(command):
-        found.append(("swallowed_failure", "--passWithNoTests", command))
-    statements = split_statements(command)
-    status_kept = bool(_STATUS_KEPT.search(command))
+    statements = [st for st in split_statements(command)
+                  if any(s for s in st.stages)]
+    # Only on a stage that runs a check: not in a here-doc body, a quoted
+    # script or a string literal that merely contains the flag.
+    for st in statements:
+        hit = next((s for s in st.stages
+                    if s and _PASS_WITH_NO_TESTS.search(s) and _has_check([s])), None)
+        if hit is not None:
+            found.append(("swallowed_failure", "--passWithNoTests", hit))
+            break
+    norms = [normalize_stage(st.stages[0]) for st in statements]
+    texts = [_text(st) for st in statements]
+    checks = [_has_check(st.stages) for st in statements]
     # Stages of the current &&/|| chain, so `cd x && pytest || true` counts.
     chain: list[str] = []
     chain_start = 0
-    seen_check = False
     for pos, statement in enumerate(statements):
         stages = [s for s in statement.stages if s]
-        if not stages:
-            continue
-        is_swallow = (len(stages) == 1 and _SWALLOW_TAIL.fullmatch(
-            normalize_stage(stages[0]) or ""))
+        before, after = norms[:pos], texts[pos + 1:]
+        pipefail = any(_PIPEFAIL_ON.match(n) for n in before)
+        errexit = any(_ERREXIT_ON.match(n) for n in before)
+        read_after = any(_STATUS_READ.search(t) for t in after)
         prev_op = statements[pos - 1].op if pos else ""
-        if is_swallow and prev_op == "||" and _has_check(chain):
-            found.append(("swallowed_failure", "|| " + stages[0].strip(),
-                          command[chain_start:statement.end]))
-        elif (is_swallow and prev_op in (";", "\n") and seen_check
-              and _EXIT_ZERO.fullmatch(stages[0].strip())
-              and pos == len(statements) - 1):
-            found.append(("swallowed_failure", "; exit 0", command))
-        if len(stages) > 1 and not status_kept:
-            last = program(stages[-1])
-            if last in FILTERS and _has_check(stages[:-1]):
-                found.append(("masked_exit_code", "| " + last,
+        if prev_op == "||" and _has_check(chain):
+            # Everything from here to the end of the &&/|| chain runs only
+            # when the check failed, and its status replaces the check's.
+            tail_end = pos
+            while (tail_end < len(statements) - 1
+                   and statements[tail_end].op in ("&&", "||")):
+                tail_end += 1
+            tail = statements[pos:tail_end + 1]
+            rest = command[statement.start:]
+            if not (any(checks[pos:tail_end + 1]) or _FAILS_AGAIN.search(rest)
+                    or read_after or _STATUS_READ.search(texts[pos])):
+                is_swallow = (len(stages) == 1 and _SWALLOW_TAIL.fullmatch(
+                    normalize_stage(stages[0]) or ""))
+                how = "|| " + (stages[0].strip() if is_swallow else
+                               " ".join(_text(st) for st in tail))
+                found.append(("swallowed_failure", how[:60],
+                              command[chain_start:statement.end]))
+        if (checks[pos] and statement.op in (";", "\n") and not errexit
+                and not read_after):
+            later = [i for i in range(pos + 1, len(statements))
+                     if _sets_status(statements[i])]
+            if later and not any(checks[i] for i in later):
+                # The call's status is the last command's, not the check's.
+                # `; exit 0` says so on purpose; anything else loses it the
+                # way a pager does, and the output still shows the result.
+                last = statements[later[-1]]
+                if _EXIT_ZERO.fullmatch(texts[later[-1]].strip()):
+                    found.append(("swallowed_failure", "; exit 0",
+                                  command[statement.start:last.end]))
+                else:
+                    how = "; " + (program(last.stages[0]) or texts[later[-1]].strip())
+                    found.append(("masked_exit_code", how[:60],
+                                  command[statement.start:last.end]))
+        if len(stages) > 1 and not pipefail:
+            last_prog = program(stages[-1])
+            if last_prog in FILTERS and _has_check(stages[:-1]) and not read_after:
+                found.append(("masked_exit_code", "| " + last_prog,
                               command[statement.start:statement.end]))
-        if _has_check(stages):
-            seen_check = True
+        if stages[0].lstrip()[:1] in ("(", "{"):
+            # A group starts here: a `||` inside it applies to the group's
+            # own commands, not to the chain before it.
+            chain = []
         if not chain:
             chain_start = statement.start
         chain = (chain + stages) if statement.op in ("&&", "||") else []
     return found
+
+
+def masked_exit(command: str) -> str | None:
+    """How a check's exit status in `command` is hidden (`| tail`, `; git`,
+    `|| true` ...), or None when the call's status is the check's own."""
+    found = masking(command)
+    return found[0][1] if found else None

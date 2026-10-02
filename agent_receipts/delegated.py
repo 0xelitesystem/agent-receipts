@@ -21,6 +21,13 @@ small: the command, the target path, the exit status and whether the
 output reported failures. Tool output itself is dropped as soon as it
 has been read. Gaming signals are found while streaming, because they
 need the edit content that is not kept.
+
+A shell command sent to the background is held back until its
+<task-notification> is seen in the same transcript; one that never
+completes there is no evidence. When the agent finished is the latest
+timestamp on any of its lines (read with a byte search, not a decode);
+a transcript whose last line is cut off is still being written, so its
+agent has not finished.
 """
 
 from __future__ import annotations
@@ -30,10 +37,13 @@ import os
 import re
 from pathlib import Path
 
-from .evidence import FAILURE_IN_OUTPUT, check_types
+from .evidence import FAILURE_IN_OUTPUT, PASS_IN_OUTPUT, check_types
 from .gaming import signals_for_event
 from .models import Event, EventKind, Session, Source
-from .parser import epoch, exit_code_of
+from .parser import (
+    background_done, background_id, complete_background, epoch, exit_code_of,
+    notice_text,
+)
 from .redact import redact_secrets
 
 _AGENT_FILE = re.compile(
@@ -43,6 +53,9 @@ _EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 _SHELL_TOOLS = ("Bash", "PowerShell")
 _RESULT_ID = re.compile(rb'"tool_use_id"\s*:\s*"([^"\\]{1,256})"')
 _TOOL_USE = b'"tool_use"'
+_NOTICE = b"task-notification"
+_TIMESTAMP_KEY = b'"timestamp"'
+_TIMESTAMP_VALUE = re.compile(rb'\s*:\s*"([0-9T:.+Z -]{10,48})"')
 _META_LIMIT = 64 * 1024
 _LABEL_LIMIT = 60
 _LABEL_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f؜‎‏‪-‮⁦-⁩]")
@@ -128,12 +141,49 @@ def _result_text(block: dict, tool_use_result) -> str:
     return "\n".join(p for p in parts if p)
 
 
+def _line_time(line: bytes) -> bytes | None:
+    """The raw value of the last "timestamp" key on a line, without decoding it."""
+    at = line.rfind(_TIMESTAMP_KEY)
+    if at < 0:
+        return None
+    match = _TIMESTAMP_VALUE.match(line, at + len(_TIMESTAMP_KEY))
+    return match.group(1) if match else None
+
+
+def _complete(line: bytes, background: dict, source: Source) -> None:
+    """Pair a completion notice with the background command it reports on."""
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return
+    if not isinstance(record, dict):
+        return
+    notice = notice_text(record)
+    done = background_done(notice) if notice else None
+    if done is None:
+        return
+    ids, code = done
+    launch = next((background[i] for i in ids if i in background), None)
+    if launch is None:
+        return
+    for key in [k for k, v in background.items() if v is launch]:
+        del background[key]
+    timestamp = str(record.get("timestamp", ""))
+    seconds = epoch(timestamp)
+    if seconds is None:
+        return
+    complete_background(launch, code, seconds, timestamp)
+    source.events.append(launch)
+
+
 def read_source(source: Source) -> Source:
     """Stream one delegated transcript into source.events and source.gaming."""
     pending: dict[str, Event] = {}
+    background: dict[str, Event] = {}  # tool id / task id -> launch awaiting its notice
     where = None
     last_line = b""
-    last_seen: float | None = None
+    latest: float | None = None
+    seen_raw: set[bytes] = set()
     try:
         fh = open(source.path, "rb")
     except OSError:
@@ -143,7 +193,18 @@ def read_source(source: Source) -> Source:
             if len(line) < 3:
                 continue
             last_line = line
+            raw = _line_time(line)
+            if raw is not None and raw not in seen_raw:
+                if len(seen_raw) > 4096:
+                    seen_raw.clear()
+                seen_raw.add(raw)
+                seconds = epoch(raw.decode("ascii", "replace"))
+                if seconds is not None and (latest is None or seconds > latest):
+                    latest = seconds
             if _TOOL_USE not in line:
+                if background and _NOTICE in line:
+                    _complete(line, background, source)
+                    continue
                 if not pending or b'"tool_use_id"' not in line:
                     continue
                 ids = _RESULT_ID.findall(line)
@@ -156,8 +217,6 @@ def read_source(source: Source) -> Source:
             if not isinstance(record, dict):
                 continue
             seconds = epoch(str(record.get("timestamp", "")))
-            if seconds is not None:
-                last_seen = seconds if last_seen is None else max(last_seen, seconds)
             message = record.get("message")
             content = message.get("content") if isinstance(message, dict) else None
             if not isinstance(content, list):
@@ -201,18 +260,30 @@ def read_source(source: Source) -> Source:
                     event.output = _result_text(block, tool_use_result)
                     exit_code_of(event)
                     event.failure_hint = bool(FAILURE_IN_OUTPUT.search(event.output))
+                    event.pass_hint = bool(PASS_IN_OUTPUT.search(event.output))
+                    bid = (background_id(tool_use_result, event.output)
+                           if event.tool_name in _SHELL_TOOLS else None)
                     event.output = ""
+                    if bid is not None:
+                        # Only launched: it counts once its notice is seen.
+                        event.background = True
+                        event.exit_code = None
+                        background[event.tool_id] = event
+                        if bid != "?":
+                            background[bid] = event
+                        continue
                     event.timestamp = str(record.get("timestamp", ""))
                     if seconds is not None:
                         event.t = seconds
                         source.events.append(event)
-    # The agent finished when it wrote its last record.
+    # The agent finished when it wrote its last record. A last line that
+    # does not parse is still being written: the agent has not finished.
     try:
-        tail = json.loads(last_line)
-        end = epoch(str(tail.get("timestamp", ""))) if isinstance(tail, dict) else None
+        json.loads(last_line) if last_line else None
     except ValueError:
-        end = None
-    source.finished = end if end is not None else last_seen
+        source.finished = None
+        return source
+    source.finished = latest
     return source
 
 

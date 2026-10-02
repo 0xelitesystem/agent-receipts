@@ -15,10 +15,16 @@ Each claim gets one of four verdicts:
                 or the claimed artifact does not exist.
 
 Ordering across transcripts. Main-session events are ordered by their
-position in the main transcript. An event in a delegated transcript
-counts for a claim only when its result came back before the claim
-(by timestamp) and its agent had finished before the claim, so a check
-the main agent could not yet know about never backs what it said.
+position in the main transcript. A run in a delegated transcript backs
+a claim only when its result came back before the claim (by timestamp)
+and its agent had finished before the claim, so a check the main agent
+could not yet know about never backs what it said. An edit is judged by
+its own time only: an edit made before the claim by an agent that was
+still working counts toward STALE, because the code had changed.
+
+Background runs count from their completion notice, not from their
+launch. A run whose exit code a pager or filter hid backs a claim only
+when its output shows a pass marker; otherwise the claim is UNVERIFIED.
 
 Relayed claims. A claim made in the same turn that a delegated result
 came back in (or one that says "the agent reports...") passes on that
@@ -34,7 +40,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from .evidence import CHECK_TYPES, masking, stage_types
+from .evidence import CHECK_TYPES, masked_exit, stage_types
 from .models import (
     Claim, ClaimType, Event, EventKind, Finding, Session, Source, Verdict,
 )
@@ -42,6 +48,7 @@ from .redact import redact_secrets
 from .shell import norm_path, run_directory
 
 RELAYED_REASON = "relayed from an agent's report, no command result seen"
+MASKED_REASON = "exit code hidden by a pipe and output does not show the result"
 
 # Wording that passes on another agent's report.
 _RELAY_WORDING = re.compile(
@@ -67,10 +74,29 @@ def _where(event: Event) -> str:
     return "main" if event.source is None else event.source.describe()
 
 
+def _how_masked(event: Event) -> str | None:
+    return masked_exit(event.command) if event.command else None
+
+
+def _inconclusive(event: Event) -> str | None:
+    """The reason, when a pipe or a later command hid the exit code and the
+    output shows no pass marker; else None."""
+    how = _how_masked(event)
+    if how is None or event.pass_hint:
+        return None
+    if how.startswith("| "):
+        return MASKED_REASON
+    return f"exit code hidden by `{how}` and output does not show the result"
+
+
 def _masked_note(event: Event) -> str:
-    """Note when the run's exit status was hidden by a pager or filter."""
-    if any(m[0] == "masked_exit_code" for m in masking(event.command)):
-        return ", exit code hidden by a pipe, judged from its output"
+    """Note how the run's result was read when it was not a plain exit code."""
+    how = _how_masked(event)
+    if how is not None:
+        where = "a pipe" if how.startswith("| ") else f"`{how}`"
+        return f", exit code hidden by {where}, output shows a pass"
+    if event.background:
+        return ", ran in the background, from its completion notice"
     return ""
 
 
@@ -93,12 +119,15 @@ class Timeline:
         edits.sort(key=lambda pair: pair[0])
         self._edit_keys = [k for k, _ in edits]
         self._edits = [e for _, e in edits]
-        self._prompts = sorted(session.prompt_starts)
+        # (index, line) of each prompt; older callers may set only prompt_starts.
+        self._prompts = sorted(session.prompt_marks or
+                               [(i, -1) for i in session.prompt_starts])
 
     def _all_tool_calls(self):
         for event in self.session.events:
             if event.kind is EventKind.TOOL_CALL:
-                yield (event.t, 0, event.index), event
+                order = event.index if event.done_order is None else event.done_order
+                yield (event.t, 0, order), event
         for n, source in enumerate(self.session.sources):
             for seq, event in enumerate(source.events):
                 yield (event.t, 1, n, seq), event
@@ -110,11 +139,16 @@ class Timeline:
         return (event.t, 0, claim.event_index)
 
     def relay_keys(self, claim: Claim) -> set[tuple[str, str]]:
-        """Agents and runs whose results came back in the claim's turn."""
-        pos = bisect.bisect_right(self._prompts, claim.event_index)
-        start = self._prompts[pos - 1] if pos else 0
+        """Agents and runs whose results came back in the claim's turn.
+
+        A delivery and the next prompt can share an event index (nothing
+        happened between them), so they are ordered by line number: a
+        delivery recorded before the prompt belongs to the previous turn.
+        """
+        pos = bisect.bisect_right(self._prompts, (claim.event_index, float("inf")))
+        start = self._prompts[pos - 1] if pos else (-1, -1)
         return {d.key for d in self.session.deliveries
-                if start <= d.index <= claim.event_index}
+                if start < (d.index, d.seq) and d.index <= claim.event_index}
 
     def eligible(self, event: Event, claim_key: tuple,
                  restrict: set[tuple[str, str]] | None) -> bool:
@@ -151,14 +185,14 @@ class Timeline:
         lo = bisect.bisect_right(self._edit_keys, start)
         hi = bisect.bisect_left(self._edit_keys, claim_key)
         return [self._edits[i] for i in range(lo, hi)
-                if self.eligible(self._edits[i], claim_key, restrict)
-                and _inside(self._edits[i], within)]
+                if _inside(self._edits[i], within)]
 
     def last_edit(self, claim_key, restrict) -> tuple[tuple, Event] | None:
-        for i in range(bisect.bisect_left(self._edit_keys, claim_key) - 1, -1, -1):
-            if self.eligible(self._edits[i], claim_key, restrict):
-                return self._edit_keys[i], self._edits[i]
-        return None
+        """The newest edit before the claim, by anyone: whether its agent had
+        finished, or was the one the claim relays, does not matter for
+        whether the code changed."""
+        hi = bisect.bisect_left(self._edit_keys, claim_key)
+        return (self._edit_keys[hi - 1], self._edits[hi - 1]) if hi else None
 
     def writes_before(self, claim_key, restrict) -> list[Event]:
         hi = bisect.bisect_left(self._edit_keys, claim_key)
@@ -213,6 +247,10 @@ def _verify_command_claim(timeline: Timeline, claim: Claim, ctx: _Context) -> Fi
         return _found(claim, ctx, Verdict.CONTRADICTED,
                       f"most recent relevant run failed ({reason}): "
                       f"`{_short(run.command)}`", run)
+    reason = _inconclusive(run)
+    if reason:
+        return _found(claim, ctx, Verdict.UNVERIFIED,
+                      f"{reason}: `{_short(run.command)}`", run)
     if claim.type in CHECK_TYPES:
         # Only edits inside the folder the check ran in make it stale: a
         # parallel agent working on another repository does not.
@@ -308,6 +346,10 @@ def _verify_task_done(timeline: Timeline, claim: Claim, ctx: _Context) -> Findin
             if _command_failed(run):
                 return _found(claim, ctx, Verdict.CONTRADICTED,
                               f"check after final edit failed: `{_short(run.command)}`", run)
+            reason = _inconclusive(run)
+            if reason:
+                return _found(claim, ctx, Verdict.UNVERIFIED,
+                              f"{reason}: `{_short(run.command)}`", run)
             return _found(claim, ctx, Verdict.VERIFIED,
                           f"verified after final edit by `{_short(run.command)}`", run)
     return _unverified(claim, ctx,

@@ -45,6 +45,12 @@ _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PY_HEAD = re.compile(r"(?:python[0-9.]*|py)", re.IGNORECASE)
 _EXE_SUFFIX = re.compile(r"\.(?:exe|cmd|bat)$", re.IGNORECASE)
 _HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+# Interpreter options that may sit between python (or py) and -m.
+_PY_VERSION_FLAG = re.compile(r"^-(?:[0-9][0-9.]*(?:-(?:32|64))?|V:\S+)$")
+_PY_SINGLE_FLAGS = re.compile(r"^-[uBOEIsSbdqRP]+$")
+_PY_ARG_FLAGS = frozenset({"-X", "-W"})
+# timeout's options that take a value, before its duration.
+_TIMEOUT_ARG_FLAGS = frozenset({"-s", "-k", "--signal", "--kill-after"})
 
 
 @dataclass
@@ -175,6 +181,30 @@ def _basename(word: str) -> str:
     return word[cut + 1:] if cut >= 0 else word
 
 
+def _skip_timeout(words: list[str]) -> list[str]:
+    """Drop `timeout`, its options and its duration: `timeout -s KILL 60 x` is x."""
+    i = 1
+    while i < len(words) and words[i].startswith("-") and words[i] != "--":
+        i += 2 if words[i] in _TIMEOUT_ARG_FLAGS else 1
+    if i < len(words) and words[i] == "--":
+        i += 1
+    return words[i + 1:]
+
+
+def _skip_python_options(rest: list[str]) -> list[str]:
+    """Drop interpreter options before -m: `-3 -X utf8 -u -m pytest` is `-m pytest`."""
+    i = 0
+    while i < len(rest) and rest[i] != "-m":
+        word = rest[i]
+        if word in _PY_ARG_FLAGS:
+            i += 2
+        elif _PY_VERSION_FLAG.match(word) or _PY_SINGLE_FLAGS.match(word):
+            i += 1
+        else:
+            return rest
+    return rest[i:] if i < len(rest) else rest
+
+
 def normalize_stage(stage: str, _depth: int = 0) -> str:
     """The stage with its prefixes dropped and its program reduced to a name.
 
@@ -188,7 +218,7 @@ def normalize_stage(stage: str, _depth: int = 0) -> str:
         if low in _PREFIX_WORDS or _ASSIGNMENT.match(words[0]):
             words.pop(0)
         elif low == "timeout" and len(words) > 1:
-            words = words[2:]
+            words = _skip_timeout(words)
         elif low in _RUNNERS and len(words) > 1 and words[1] == _RUNNERS[low]:
             words = words[2:]
         else:
@@ -199,6 +229,8 @@ def normalize_stage(stage: str, _depth: int = 0) -> str:
     if _PY_HEAD.fullmatch(head):
         head = "python"
     rest = words[1:]
+    if head == "python":
+        rest = _skip_python_options(rest)
     if head == "git":
         while len(rest) >= 2 and rest[0] in ("-C", "-c"):
             rest = rest[2:]

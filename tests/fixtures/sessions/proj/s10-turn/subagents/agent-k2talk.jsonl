@@ -1,0 +1,2 @@
+{"agentId": "k2talk", "cwd": "/work/app", "isSidechain": true, "message": {"content": "Talk.", "role": "user"}, "sessionId": "s10-turn", "timestamp": "2026-07-01T10:00:21.000Z", "type": "user"}
+{"agentId": "k2talk", "cwd": "/work/app", "isSidechain": true, "message": {"content": [{"text": "Nothing to run.", "type": "text"}], "role": "assistant"}, "sessionId": "s10-turn", "timestamp": "2026-07-01T10:00:30.000Z", "type": "assistant"}

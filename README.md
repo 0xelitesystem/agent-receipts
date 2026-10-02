@@ -127,7 +127,7 @@ Independent of claims, the auditor scans for changes that make checks pass by we
 - **Weakened assertions**, an edit to a test file that removes more assertions than it adds
 - **Added skips**, `@pytest.mark.skip`, `it.skip`, `#[ignore]`, `t.Skip()` added to an existing test
 - **Swallowed failures**, `npm test || true`, `pytest; exit 0`, `--passWithNoTests` (only on a test, build, lint or type check; `ls dir || true` is not flagged)
-- **Masked exit codes**, a check piped into a pager or filter (`pytest | tail`, `npm test | grep`, `| Select-Object`), which reports the filter's exit code instead of the check's; not raised when the command keeps the real status (`pipefail`, `PIPESTATUS`, `$LASTEXITCODE`)
+- **Masked exit codes**, a check piped into a pager or filter (`pytest | tail`, `npm test | grep`, `| Select-Object`), or followed by other commands (`pytest; git status`), so the call reports another command's exit code; not raised when the real status is kept (`set -o pipefail` before it, `${PIPESTATUS[0]}`, `$?` or `exit $LASTEXITCODE` after it). Such a run backs a claim only when its output shows a pass marker (`5 passed`, `# fail 0`, `test result: ok`); otherwise the claim is UNVERIFIED. Version probes, listings and dry runs (`pytest --version`, `--collect-only`, `make -n`) are neither evidence nor flagged.
 - **Bypassed hooks**, `git commit --no-verify`
 - **Deleted/emptied test files**
 
@@ -150,6 +150,8 @@ The parser is isolated in [`agent_receipts/parser.py`](agent_receipts/parser.py)
 - A passing test run proves the suite passed, not that the suite is any good.
 - Which run backs a claim is chosen by claim type and time, not by project: in a session that works on several repositories, a test run in one can back or contradict a claim about another. Relayed claims are narrowed to the agents whose results came back in that turn; other claims see every agent that had finished. Staleness is scoped: only edits inside the folder the check ran in make it stale.
 - An agent counts as finished when its transcript has no later record, so an idle background agent looks finished. A test run meant to fail (mutation testing) looks like a failure.
+- A shell command sent to the background counts only from its completion notice, which has an exit code but no output; a result read later with BashOutput or TaskOutput is not used.
+- When a pipe or a later command hid a check's exit code, the claim needs a pass marker from a fixed list (`N passed`, `# fail 0`, `test result: ok`, `OK`, `ok pkg`, `Found 0 errors` and similar). A runner that prints none of them leaves the claim UNVERIFIED.
 - The shell reader is a small scanner, not a shell: tests run inside a script (`bash ci.sh`), an alias or `eval` are not seen.
 
 ## Part of the agent accountability suite

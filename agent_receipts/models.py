@@ -46,6 +46,12 @@ class Event:
     t: float = float("-inf")
     source: "Source | None" = None  # None means the main session
     failure_hint: bool = False  # output reported failures (kept when output is dropped)
+    pass_hint: bool = False  # output shows a positive pass marker (kept likewise)
+    # A command that went to the background: its first result only says it
+    # started. It counts once its completion notice is seen, with the exit
+    # code and time from that notice; until then it is no evidence.
+    background: bool = False
+    done_order: float | None = None  # main ordering position of the notice
     check_types: frozenset = frozenset()  # ClaimTypes this command can back
 
     @property
@@ -94,6 +100,7 @@ class Delivery:
 
     index: int  # number of main events before it
     key: tuple[str, str]  # ("agent", agentId) or ("run", runId)
+    seq: int = 0  # line number in the main transcript, to order it against prompts
 
 
 @dataclass
@@ -121,6 +128,9 @@ class Session:
     # Where each human prompt starts (index of the next event), and where
     # delegated results came back, for telling a relayed claim apart.
     prompt_starts: list[int] = field(default_factory=list)
+    # (index, line number) of each human prompt; the line number orders a
+    # prompt against a delivery recorded with the same index.
+    prompt_marks: list[tuple[int, int]] = field(default_factory=list)
     deliveries: list[Delivery] = field(default_factory=list)
     sources: list[Source] = field(default_factory=list)
     main_only: bool = True

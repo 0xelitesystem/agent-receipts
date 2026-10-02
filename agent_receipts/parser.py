@@ -16,6 +16,12 @@ Format notes (observed against Claude Code 2.x transcripts):
   be "async_launched", in which case the result arrives later as a user
   message that starts with <task-notification> and names the launching
   <tool-use-id>. Those points are recorded as Deliveries.
+- Background shell commands: a Bash call with run_in_background (or one
+  moved to the background after its timeout) first returns only "Command
+  running in background with ID: ..." and toolUseResult.backgroundTaskId.
+  That is not a result. The command counts as evidence only once its
+  <task-notification> arrives (as a user message, an attachment or a
+  queue-operation record), with the exit code and time from that notice.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import os
 import re
 from pathlib import Path
 
-from .evidence import FAILURE_IN_OUTPUT, check_types
+from .evidence import FAILURE_IN_OUTPUT, PASS_IN_OUTPUT, check_types
 from .models import Delivery, Event, EventKind, Session
 
 _EXIT_CODE_RE = re.compile(r"[Ee]xit code:? (\d+)")
@@ -40,6 +46,70 @@ _AGENT_ID_RE = re.compile(r"agentId:\s*([0-9A-Za-z_-]{4,64})")
 _TAG_RE = {tag: re.compile(rf"<{tag}>([^<]{{1,200}})</{tag}>")
            for tag in ("task-id", "tool-use-id", "status")}
 _DONE_STATUSES = ("completed", "failed", "killed", "error", "stopped", "cancelled")
+_SHELL_TOOLS = ("Bash", "PowerShell")
+_BACKGROUND_TEXT = re.compile(
+    r"^\s*Command running in background|moved to the background", re.IGNORECASE)
+_BACKGROUND_ID = re.compile(r"\bID:?\s*([0-9A-Za-z_-]{3,64})")
+_NOTICE_EXIT = re.compile(r"exit code (\d+)", re.IGNORECASE)
+
+
+def background_id(tool_use_result, text: str) -> str | None:
+    """The task id when a shell result only says the command went to the background."""
+    if isinstance(tool_use_result, dict):
+        bid = tool_use_result.get("backgroundTaskId")
+        if isinstance(bid, str) and bid:
+            return bid
+    if _BACKGROUND_TEXT.search(text[:300]):
+        match = _BACKGROUND_ID.search(text[:300])
+        return match.group(1) if match else "?"
+    return None
+
+
+def notice_text(record: dict) -> str | None:
+    """The <task-notification> a record carries, in any shape it is written in."""
+    rtype = record.get("type")
+    if rtype == "user":
+        message = record.get("message")
+        return _notification_text(message) if isinstance(message, dict) else None
+    if rtype == "attachment":
+        attachment = record.get("attachment")
+        text = attachment.get("prompt") if isinstance(attachment, dict) else None
+    elif rtype == "queue-operation":
+        text = record.get("content")
+    else:
+        return None
+    if isinstance(text, str) and text.lstrip().startswith("<task-notification>"):
+        return text
+    return None
+
+
+def background_done(text: str) -> tuple[list[str], int] | None:
+    """(ids, exit code) from a background command's completion notice.
+
+    ids are the notice's tool-use id and task id. None when the notice
+    does not report a finished run (killed, stopped, still running).
+    """
+    head = text[:4000]
+    found = {}
+    for tag, rx in _TAG_RE.items():
+        match = rx.search(head)
+        found[tag] = match.group(1).strip() if match else ""
+    status = found["status"].lower()
+    if status not in ("completed", "failed"):
+        return None
+    match = _NOTICE_EXIT.search(head)
+    code = int(match.group(1)) if match else (0 if status == "completed" else 1)
+    return [i for i in (found["tool-use-id"], found["task-id"]) if i], code
+
+
+def complete_background(event: Event, code: int, when: float, timestamp: str) -> None:
+    """Turn a background launch into a finished run, from its completion notice."""
+    event.exit_code = code
+    event.is_error = code != 0
+    event.failure_hint = False
+    event.pass_hint = False  # the output is in a file the transcript does not hold
+    event.t = when
+    event.timestamp = timestamp
 
 
 def epoch(timestamp: str) -> float | None:
@@ -103,7 +173,10 @@ def parse_transcript(path: str | Path) -> Session:
     session = Session(path=str(path))
     pending: dict[str, Event] = {}  # tool_use id -> Event awaiting its result
     delegated: dict[str, tuple[str, str]] = {}  # launching tool id / task id -> key
+    background: dict[str, tuple[Event, frozenset]] = {}  # tool id / task id -> launch
+    shell_ids: set[str] = set()  # every background shell id: its notice is no delivery
     index = 0
+    line_no = 0
     clock = float("-inf")
 
     with open(path, encoding="utf-8") as fh:
@@ -111,6 +184,7 @@ def parse_transcript(path: str | Path) -> Session:
             line = line.strip()
             if not line:
                 continue
+            line_no += 1
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
@@ -125,6 +199,20 @@ def parse_transcript(path: str | Path) -> Session:
                 seconds = epoch(timestamp)
                 if seconds is not None and seconds > clock:
                     clock = seconds
+
+            if background and rtype in ("user", "attachment", "queue-operation"):
+                notice = notice_text(record)
+                done = background_done(notice) if notice else None
+                if done is not None:
+                    ids, code = done
+                    launch = next((background[i] for i in ids if i in background), None)
+                    if launch is not None:
+                        event, types = launch
+                        for key in [k for k, v in background.items() if v is launch]:
+                            del background[key]
+                        complete_background(event, code, clock, timestamp)
+                        event.done_order = index - 0.5
+                        event.check_types = types
 
             if rtype == "assistant":
                 if not session.session_id:
@@ -174,10 +262,12 @@ def parse_transcript(path: str | Path) -> Session:
                 tool_use_result = record.get("toolUseResult")
                 notice = _notification_text(message)
                 if notice is not None:
-                    _note_notification(session, notice, delegated, index)
+                    if not _notice_ids(notice) & shell_ids:
+                        _note_notification(session, notice, delegated, index, line_no)
                     continue
                 if _is_human_prompt(record, message):
                     session.prompt_starts.append(index)
+                    session.prompt_marks.append((index, line_no))
                     continue
                 for block in _blocks(message):
                     if block.get("type") != "tool_result":
@@ -189,8 +279,23 @@ def parse_transcript(path: str | Path) -> Session:
                     event.output = _result_text(block, tool_use_result)
                     exit_code_of(event)
                     event.failure_hint = bool(FAILURE_IN_OUTPUT.search(event.output))
+                    event.pass_hint = bool(PASS_IN_OUTPUT.search(event.output))
+                    if event.tool_name in _SHELL_TOOLS:
+                        bid = background_id(tool_use_result, event.output)
+                        if bid is not None:
+                            # Not a result yet: no evidence until its notice.
+                            event.background = True
+                            event.exit_code = None
+                            launch = (event, event.check_types)
+                            event.check_types = frozenset()
+                            background[event.tool_id] = launch
+                            shell_ids.add(event.tool_id)
+                            if bid != "?":
+                                background[bid] = launch
+                                shell_ids.add(bid)
                     if event.tool_name in _DELEGATING_TOOLS:
-                        _note_launch(session, event, tool_use_result, delegated, index)
+                        _note_launch(session, event, tool_use_result, delegated,
+                                     index, line_no)
 
     return session
 
@@ -225,7 +330,8 @@ def _is_human_prompt(record: dict, message: dict) -> bool:
 
 
 def _note_launch(session: Session, event: Event, tool_use_result,
-                 delegated: dict[str, tuple[str, str]], index: int) -> None:
+                 delegated: dict[str, tuple[str, str]], index: int,
+                 line_no: int = 0) -> None:
     """Map a delegating tool call to its agent or run; record a delivery if done."""
     info = tool_use_result if isinstance(tool_use_result, dict) else {}
     key: tuple[str, str] | None = None
@@ -255,11 +361,22 @@ def _note_launch(session: Session, event: Event, tool_use_result,
                 or info.get("isAsync") is True
                 or "launched in background" in event.output[:200])
     if not launched and not event.is_error:
-        session.deliveries.append(Delivery(index=index, key=key))
+        session.deliveries.append(Delivery(index=index, key=key, seq=line_no))
+
+
+def _notice_ids(text: str) -> set[str]:
+    head = text[:4000]
+    found = set()
+    for tag in ("task-id", "tool-use-id"):
+        match = _TAG_RE[tag].search(head)
+        if match:
+            found.add(match.group(1).strip())
+    return found
 
 
 def _note_notification(session: Session, text: str,
-                       delegated: dict[str, tuple[str, str]], index: int) -> None:
+                       delegated: dict[str, tuple[str, str]], index: int,
+                       line_no: int = 0) -> None:
     head = text[:4000]
     found = {}
     for tag, rx in _TAG_RE.items():
@@ -271,7 +388,7 @@ def _note_notification(session: Session, text: str,
     if key is None and found["task-id"]:
         key = ("agent", found["task-id"])
     if key is not None:
-        session.deliveries.append(Delivery(index=index, key=key))
+        session.deliveries.append(Delivery(index=index, key=key, seq=line_no))
 
 
 def projects_dir() -> Path:
